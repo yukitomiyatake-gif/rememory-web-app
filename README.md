@@ -1,5 +1,7 @@
 ﻿# re:Memory
 
+> この`development`ブランチはローカル検証専用です。GitHub Pagesの公開元に設定しないでください。既定ではGoogle OAuthとSupabaseの接続情報を空にしており、本番環境へ接続しません。
+
 re:Memory は、写真をすぐに見返すのではなく、時間をかけて「記憶のかけら」と再会し、その意味を育てていく静的 Web MVP です。
 
 ## 構成
