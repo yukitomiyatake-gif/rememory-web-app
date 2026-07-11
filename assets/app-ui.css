@@ -30,14 +30,12 @@
 }
 
 html {
-  min-width: 320px;
   background: var(--color-bg);
   scroll-behavior: auto;
 }
 
 body {
   margin: 0;
-  min-width: 320px;
   min-height: 100vh;
   overflow-x: hidden;
   color: var(--color-text);
@@ -970,7 +968,6 @@ select {
 
 input,
 select {
-  height: 48px;
   min-height: 48px;
   padding: 10px 12px;
 }
@@ -1829,20 +1826,11 @@ select:focus {
   }
 }
 
-@media (max-width: 640px) {
-  .app-shell {
-    width: min(100% - 20px, var(--content-width));
-    padding-bottom: 34px;
-  }
-
+@media (max-width: 720px) {
   .topbar {
     display: grid;
     gap: 8px;
     padding: 8px 0 9px;
-  }
-
-  .brand {
-    min-width: 0;
   }
 
   .brand {
@@ -1860,6 +1848,14 @@ select:focus {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .nav-tabs button {
+    min-height: 40px;
+    padding: 7px 6px;
+    font-size: 13px;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
   .auth-area {
     width: 100%;
     justify-content: flex-start;
@@ -1868,13 +1864,12 @@ select:focus {
   .auth-area.signed-in {
     max-width: 100%;
   }
+}
 
-  .nav-tabs button {
-    min-height: 40px;
-    padding: 7px 6px;
-    font-size: 13px;
-    overflow-wrap: anywhere;
-    white-space: normal;
+@media (max-width: 640px) {
+  .app-shell {
+    width: min(100% - 20px, var(--content-width));
+    padding-bottom: 34px;
   }
 
   h1,
