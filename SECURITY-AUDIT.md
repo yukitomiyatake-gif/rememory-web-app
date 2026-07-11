@@ -29,7 +29,11 @@ Supabase の RLS、Storage、アカウント削除 Edge Function は実装ファ
 - `index.html`: CSP、Referrer Policy、固定版Supabase SDKとSRI
 - `assets/app.js`: 本番用認証、キャッシュ分離、画像検証・EXIF除去、アカウント削除
 - `assets/app-ui.css`: 開発者UI削除、アカウント管理UI
-- `supabase/migrations/20260711130000_harden_rememory_security.sql`: RLS、Storage、削除RPC
+- `supabase/staging/01_rls_and_account_delete.sql`: ステージング用RLSと削除RPC
+- `supabase/staging/02_storage_policies.sql`: ステージング用Storageポリシー
+- `supabase/staging/rollback.sql`: 監査時点の本番ポリシー構成へのロールバック
+- `supabase/staging/TEST-DATA.md`: 合成テストデータ作成手順
+- `supabase/staging/VALIDATION.md`: ユーザーA/B・匿名状態の検証項目
 - `supabase/functions/delete-account/index.ts`: サーバー側アカウント削除
 - `supabase/config.toml`: Edge FunctionのJWT検証
 - `tests/security-audit.mjs`: 本番成果物の回帰検査
@@ -39,7 +43,7 @@ Supabase の RLS、Storage、アカウント削除 Edge Function は実装ファ
 ## Supabase適用手順
 
 1. 本番のバックアップを取得し、同じスキーマのステージング環境を用意する。
-2. SQL Editorでマイグレーションを実行する。想定外のテーブル・バケット構成では処理が停止する。
+2. 本番とは別のステージングSQL Editorで`01_rls_and_account_delete.sql`と`02_storage_policies.sql`を順番に実行する。想定外のテーブル・バケット・ポリシー構成では処理が停止する。
 3. Storageの既存オブジェクトが `ユーザーUUID/...` 形式で、`owner_id` が本人UUIDであることを確認する。
 4. `delete-account` Edge Functionをデプロイし、`ALLOWED_ORIGINS` に公開元を設定する。service role keyはEdge Functionの環境変数だけに置く。
 5. ユーザーA/Bと匿名状態で、相互のSELECT/INSERT/UPDATE/DELETE、画像一覧・取得・更新・削除が拒否されることを検証する。

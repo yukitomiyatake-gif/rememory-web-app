@@ -9,7 +9,7 @@ re:Memoryは、写真をすぐに見返すのではなく、時間をかけて�
 - `index.html`: CSPと本番用の公開接続設定
 - `assets/app.js`: Google/Supabase認証、IndexedDBキャッシュ、画像処理、画面遷移
 - `assets/app-ui.css`: UIスタイル
-- `supabase/migrations`: RLSとStorageポリシー
+- `supabase/staging`: ステージング専用のRLS、Storage、ロールバック、検証手順
 - `supabase/functions/delete-account`: サーバー側アカウント削除
 - `tests/security-audit.mjs`: 公開成果物の静的セキュリティ検査
 
@@ -49,11 +49,11 @@ npm test
 
 ## Supabase適用手順
 
-1. `supabase/migrations/20260711130000_harden_rememory_security.sql`をステージング環境で実行します。
-2. 既存テーブル名・`user_id uuid`・`memory-images` bucketが一致しない場合、変更前にトランザクションが停止します。
-3. 既存ポリシーをSupabase Dashboardで確認し、広すぎるポリシーが残っていないことを確認します。
-4. `delete-account` Edge Functionをデプロイし、`ALLOWED_ORIGINS`へ本番originだけを設定します。
-5. 2つのテストアカウントでRLSとStorageの相互アクセス拒否を確認します。
+1. 本番とは別のSupabaseプロジェクトを作成します。
+2. `supabase/staging/README.md`の順序で、RLS SQL、Storage SQL、Edge Functionをステージングだけへ適用します。
+3. `ALLOWED_ORIGINS`にはステージングの正確なoriginを設定します。
+4. `supabase/staging/VALIDATION.md`をユーザーA/Bと匿名状態で完了します。
+5. `rollback.sql`をステージングで試し、復旧後の動作も確認します。
 
 ## 公開前に必要な手動設定
 

@@ -2,28 +2,28 @@ import { createClient } from "npm:@supabase/supabase-js@2.110.2";
 
 const BUCKET = "memory-images";
 const CONFIRMATION = "DELETE_MY_ACCOUNT";
-const DEFAULT_ORIGIN = "https://yukitomiyatake-gif.github.io";
 
-function response(origin: string, status: number, body: Record<string, unknown>) {
+function response(origin: string | null, status: number, body: Record<string, unknown>) {
+  const headers: Record<string, string> = {
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Content-Type": "application/json",
+    "Vary": "Origin"
+  };
+  if (origin) headers["Access-Control-Allow-Origin"] = origin;
   return new Response(JSON.stringify(body), {
     status,
-    headers: {
-      "Access-Control-Allow-Origin": origin,
-      "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-      "Access-Control-Allow-Methods": "POST, OPTIONS",
-      "Content-Type": "application/json",
-      "Vary": "Origin"
-    }
+    headers
   });
 }
 
 function allowedOrigin(request: Request) {
   const origin = request.headers.get("Origin") || "";
-  const configured = (Deno.env.get("ALLOWED_ORIGINS") || DEFAULT_ORIGIN)
+  const configured = (Deno.env.get("ALLOWED_ORIGINS") || "")
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
-  if (!origin) return DEFAULT_ORIGIN;
+  if (!origin || !configured.length) return "";
   return configured.includes(origin) ? origin : "";
 }
 
@@ -60,17 +60,21 @@ async function listUserObjects(admin: ReturnType<typeof createClient>, prefix: s
 
 Deno.serve(async (request) => {
   const origin = allowedOrigin(request);
-  if (!origin) return response(DEFAULT_ORIGIN, 403, { error: "origin_not_allowed" });
+  if (!Deno.env.get("ALLOWED_ORIGINS")) return response(null, 503, { error: "service_unavailable" });
+  if (!origin) return response(null, 403, { error: "origin_not_allowed" });
   if (request.method === "OPTIONS") return response(origin, 204, {});
   if (request.method !== "POST") return response(origin, 405, { error: "method_not_allowed" });
 
   const authorization = request.headers.get("Authorization") || "";
   if (!authorization.startsWith("Bearer ")) return response(origin, 401, { error: "authentication_required" });
 
-  let body: { confirmation?: string };
+  let body: Record<string, unknown>;
   try {
     body = await request.json();
   } catch {
+    return response(origin, 400, { error: "invalid_request" });
+  }
+  if (Object.keys(body).some((key) => key !== "confirmation")) {
     return response(origin, 400, { error: "invalid_request" });
   }
   if (body.confirmation !== CONFIRMATION) return response(origin, 400, { error: "confirmation_required" });
