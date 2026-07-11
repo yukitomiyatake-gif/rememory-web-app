@@ -1829,6 +1829,8 @@ select:focus {
 @media (max-width: 720px) {
   .topbar {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    justify-content: stretch;
     gap: 8px;
     padding: 8px 0 9px;
   }
