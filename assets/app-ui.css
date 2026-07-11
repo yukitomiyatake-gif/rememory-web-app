@@ -933,6 +933,7 @@ input.file-input {
 .field,
 .form-actions {
   display: grid;
+  align-content: start;
   gap: 8px;
   min-width: 0;
 }
@@ -969,6 +970,7 @@ select {
 
 input,
 select {
+  height: 48px;
   min-height: 48px;
   padding: 10px 12px;
 }
