@@ -1129,7 +1129,7 @@
     return `
       <a class="skip-link" href="#main-content">本文へ移動</a>
       <header class="topbar">
-        <a class="brand" href="./index.html" aria-label="re:Memoryの紹介ページへ">
+        <a class="brand" href="./index.html" aria-label="re:Memoryのホームへ">
           <img src="./assets/logo.png" alt="" aria-hidden="true">
           <span>re:Memory</span>
         </a>
@@ -1149,7 +1149,7 @@
       <footer class="app-footer">
         <p>© 2026 re:Memory</p>
         <nav class="app-footer-links" aria-label="フッターナビゲーション">
-          <a href="./index.html#why">re:Memoryについて</a>
+          <span>re:Memoryについて</span>
           <span>プライバシーポリシー</span>
           <span>利用規約</span>
           <span>お問い合わせ</span>

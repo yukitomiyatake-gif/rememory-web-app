@@ -4,10 +4,8 @@ re:Memory は、写真をすぐに見返すのではなく、時間をかけて�
 
 ## 構成
 
-- `index.html`: 既存LP
-- `app.html`: 操作可能なMVPアプリ
+- `index.html`: 操作可能なMVPアプリ
 - `assets/app-ui.css`: MVPアプリで使用する、整理済みのUIスタイル
-- `assets/app.css`: 以前のスタイル（比較・参照用。現在の`app.html`からは読み込みません）
 - `assets/app.js`: 画面遷移、IndexedDB保存、画像分割、画像分析、日付進行、開発メニュー
 
 ## 起動方法
@@ -16,8 +14,8 @@ re:Memory は、写真をすぐに見返すのではなく、時間をかけて�
 python -m http.server 4173
 ```
 
-ブラウザで `http://localhost:4173/app.html` を開きます。
-開発メニューを使う場合は `http://localhost:4173/app.html?debug=1` を開きます。
+ブラウザで `http://localhost:4173/` を開きます。
+開発メニューを使う場合は `http://localhost:4173/?debug=1` を開きます。
 
 ## 実装済みの主な機能
 
@@ -42,7 +40,7 @@ python -m http.server 4173
 
 ## ログイン設定
 
-`app.html` の次のmetaタグに、Google Cloudで作成したOAuth 2.0 クライアントIDを設定すると、Googleログインボタンが有効になります。
+`index.html` の次のmetaタグに、Google Cloudで作成したOAuth 2.0 クライアントIDを設定すると、Googleログインボタンが有効になります。
 
 ```html
 <meta name="google-client-id" content="YOUR_CLIENT_ID.apps.googleusercontent.com">
@@ -105,7 +103,7 @@ Googleログイン後は、写真と記録をSupabaseへ同期し、ブラウザ
 
 ## 開発メニュー
 
-`app.html?debug=1` で開くと開発メニューが表示されます。
+`?debug=1` を付けて開くと開発メニューが表示されます。
 
 - 開発モードON/OFF
 - アプリ内判定日時の確認
