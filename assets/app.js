@@ -21,6 +21,11 @@
   };
   const app = document.querySelector("#app");
   const GOOGLE_CLIENT_ID = document.querySelector('meta[name="google-client-id"]')?.content?.trim() || "";
+  const SUPABASE_URL = document.querySelector('meta[name="supabase-url"]')?.content?.trim() || "";
+  const SUPABASE_PUBLISHABLE_KEY = document.querySelector('meta[name="supabase-publishable-key"]')?.content?.trim() || "";
+  const supabaseClient = window.supabase?.createClient && SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY
+    ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
+    : null;
   const LOCAL_AUTH_USER_ID = "local-rememory-user";
   const state = {
     route: "home",
@@ -42,7 +47,9 @@
       debugSelectedMemoryId: "",
       authSession: null
     },
-    googleButtonRendered: false
+    googleButtonRendered: false,
+    supabaseUser: null,
+    cloudSyncing: false
   };
 
   const statusLabels = {
@@ -139,12 +146,34 @@
   }
 
   function isSignedIn() {
-    return Boolean(normalizeAuthSession(state.settings.authSession));
+    const session = normalizeAuthSession(state.settings.authSession);
+    if (session?.provider === "local") return true;
+    return supabaseClient ? Boolean(state.supabaseUser) : Boolean(session);
   }
 
   async function saveAuthSession(session) {
     state.settings.authSession = normalizeAuthSession(session);
     await saveSetting("authSession", state.settings.authSession);
+  }
+
+  function authSessionFromSupabaseUser(user) {
+    if (!user?.id) return null;
+    const metadata = user.user_metadata || {};
+    return {
+      provider: "google",
+      userId: user.id,
+      name: metadata.full_name || metadata.name || user.email || "Googleユーザー",
+      email: user.email || "",
+      picture: metadata.avatar_url || metadata.picture || "",
+      signedInAt: realNowIso()
+    };
+  }
+
+  async function initializeSupabaseAuth() {
+    if (!supabaseClient) return;
+    const { data, error } = await supabaseClient.auth.getSession();
+    if (error) throw error;
+    state.supabaseUser = data.session?.user || null;
   }
 
   async function loadSettings() {
@@ -154,6 +183,11 @@
       debugSelectedMemoryId: String(await getSetting("debugSelectedMemoryId", "") || ""),
       authSession: normalizeAuthSession(await getSetting("authSession", null))
     };
+    if (state.supabaseUser) {
+      state.settings.authSession = normalizeAuthSession(authSessionFromSupabaseUser(state.supabaseUser));
+    } else if (supabaseClient && state.settings.authSession?.provider === "google") {
+      state.settings.authSession = null;
+    }
     if (!state.activeMemoryId && state.settings.debugSelectedMemoryId) {
       state.activeMemoryId = state.settings.debugSelectedMemoryId;
     }
@@ -555,6 +589,139 @@
     return url;
   }
 
+  function cloudUserId() {
+    return state.supabaseUser?.id || "";
+  }
+
+  function cloudStoragePath(localPath, userId = cloudUserId()) {
+    if (!localPath || !userId) return "";
+    const relative = String(localPath).replace(/^indexeddb:\/\/images\//, "").replace(/^\/+/, "");
+    return `${userId}/${relative}`;
+  }
+
+  function memoryCloudRow(memory) {
+    const userId = cloudUserId();
+    return {
+      id: memory.id,
+      user_id: userId,
+      title: memory.title || "",
+      status: memory.status || "sleeping",
+      original_image_path: cloudStoragePath(memory.originalImagePath, userId),
+      created_at: memory.createdAt || realNowIso(),
+      available_at: memory.availableAt || null,
+      payload: { ...memory, ownerId: userId }
+    };
+  }
+
+  function fragmentCloudRow(fragment) {
+    const userId = cloudUserId();
+    return {
+      id: fragment.id,
+      memory_id: fragment.memoryId,
+      user_id: userId,
+      fragment_index: Number(fragment.index),
+      image_path: cloudStoragePath(fragment.imagePath, userId),
+      is_unlocked: Boolean(fragment.isUnlocked),
+      unlocked_at: fragment.unlockedAt || null,
+      payload: { ...fragment, ownerId: userId }
+    };
+  }
+
+  function reflectionCloudRow(reflection) {
+    const userId = cloudUserId();
+    return {
+      id: reflection.id,
+      memory_id: reflection.memoryId,
+      user_id: userId,
+      fragment_stage: reflection.fragmentStage == null ? null : Number(reflection.fragmentStage),
+      reflection_type: reflection.reflectionType || "fragment",
+      body: reflection.text || "",
+      could_not_remember: Boolean(reflection.couldNotRemember),
+      created_at: reflection.createdAt || realNowIso(),
+      local_date: reflection.localDate || null,
+      payload: { ...reflection, ownerId: userId }
+    };
+  }
+
+  async function upsertCloudRecord(table, row) {
+    if (!supabaseClient || !cloudUserId()) return;
+    const { error } = await supabaseClient.from(table).upsert(row);
+    if (error) throw error;
+  }
+
+  async function uploadCloudImage(path, blob) {
+    if (!supabaseClient || !cloudUserId() || !blob) return;
+    const remotePath = cloudStoragePath(path);
+    const { error } = await supabaseClient.storage.from("memory-images").upload(remotePath, blob, {
+      upsert: true,
+      contentType: blob.type || "image/jpeg",
+      cacheControl: "3600"
+    });
+    if (error) throw error;
+  }
+
+  async function migrateLegacyLocalData() {
+    const userId = cloudUserId();
+    if (!userId || state.cloudSyncing) return;
+    const migrationOwner = String(await getSetting("cloudMigrationOwnerId", "") || "");
+    const legacyMemories = state.memories.filter((memory) => !memory.ownerId);
+    if (migrationOwner && migrationOwner !== userId) return;
+    state.cloudSyncing = true;
+    try {
+      const ownedMemoryIds = new Set();
+      for (const memory of state.memories) {
+        if (!memory.ownerId) memory.ownerId = userId;
+        if (memory.ownerId !== userId) continue;
+        ownedMemoryIds.add(memory.id);
+        await tx("memories", "readwrite", (store) => store.put(memory));
+        await upsertCloudRecord("memories", memoryCloudRow(memory));
+      }
+      for (const fragment of state.fragments) {
+        if (!ownedMemoryIds.has(fragment.memoryId)) continue;
+        fragment.ownerId = userId;
+        await tx("fragments", "readwrite", (store) => store.put(fragment));
+        await upsertCloudRecord("memory_fragments", fragmentCloudRow(fragment));
+      }
+      for (const reflection of state.reflections) {
+        if (!ownedMemoryIds.has(reflection.memoryId)) continue;
+        reflection.ownerId = userId;
+        await tx("reflections", "readwrite", (store) => store.put(reflection));
+        await upsertCloudRecord("memory_reflections", reflectionCloudRow(reflection));
+      }
+      for (const image of state.images.values()) {
+        const belongsToOwnedMemory = [...ownedMemoryIds].some((memoryId) => String(image.path).includes(`/${memoryId}/`));
+        if (belongsToOwnedMemory) await uploadCloudImage(image.path, image.blob);
+      }
+      if (!migrationOwner || legacyMemories.length) await saveSetting("cloudMigrationOwnerId", userId);
+    } finally {
+      state.cloudSyncing = false;
+    }
+  }
+
+  async function loadCloudRecords() {
+    if (!supabaseClient || !cloudUserId()) return;
+    const [memoriesResult, fragmentsResult, reflectionsResult] = await Promise.all([
+      supabaseClient.from("memories").select("payload").order("created_at", { ascending: false }),
+      supabaseClient.from("memory_fragments").select("payload"),
+      supabaseClient.from("memory_reflections").select("payload").order("created_at", { ascending: true })
+    ]);
+    const error = memoriesResult.error || fragmentsResult.error || reflectionsResult.error;
+    if (error) throw error;
+    state.memories = (memoriesResult.data || []).map((row) => row.payload).filter(Boolean);
+    state.fragments = (fragmentsResult.data || []).map((row) => row.payload).filter(Boolean);
+    state.reflections = (reflectionsResult.data || []).map((row) => row.payload).filter(Boolean);
+
+    for (const item of [...state.memories, ...state.fragments]) {
+      const path = item.originalImagePath || item.imagePath;
+      if (!path || state.images.has(path)) continue;
+      const { data, error: downloadError } = await supabaseClient.storage.from("memory-images").download(cloudStoragePath(path));
+      if (downloadError) continue;
+      const image = { path, blob: data, savedAt: realNowIso() };
+      await tx("images", "readwrite", (store) => store.put(image));
+      state.images.set(path, image);
+    }
+  }
+
   async function loadData() {
     await loadSettings();
     state.memories = await getAll("memories");
@@ -562,28 +729,44 @@
     state.reflections = await getAll("reflections");
     const images = await getAll("images");
     state.images = new Map(images.map((image) => [image.path, image]));
+    if (state.supabaseUser) {
+      await migrateLegacyLocalData();
+      await loadCloudRecords();
+    }
     await normalizeLoadedMemories();
     await wakeDueMemories();
   }
 
   async function saveMemory(memory) {
+    if (cloudUserId()) memory.ownerId = cloudUserId();
     await tx("memories", "readwrite", (store) => store.put(memory));
+    if (cloudUserId() && !state.cloudSyncing) await upsertCloudRecord("memories", memoryCloudRow(memory));
   }
 
   async function saveFragment(fragment) {
+    if (cloudUserId()) fragment.ownerId = cloudUserId();
     await tx("fragments", "readwrite", (store) => store.put(fragment));
+    if (cloudUserId() && !state.cloudSyncing) await upsertCloudRecord("memory_fragments", fragmentCloudRow(fragment));
   }
 
   async function saveReflection(reflection) {
+    if (cloudUserId()) reflection.ownerId = cloudUserId();
     await tx("reflections", "readwrite", (store) => store.put(reflection));
+    if (cloudUserId() && !state.cloudSyncing) await upsertCloudRecord("memory_reflections", reflectionCloudRow(reflection));
   }
 
   async function saveImage(path, blob) {
     await tx("images", "readwrite", (store) => store.put({ path, blob, savedAt: realNowIso() }));
+    if (cloudUserId() && !state.cloudSyncing) await uploadCloudImage(path, blob);
   }
 
   async function deleteRecord(storeName, key) {
     await tx(storeName, "readwrite", (store) => store.delete(key));
+    if (!supabaseClient || !cloudUserId()) return;
+    const table = { memories: "memories", fragments: "memory_fragments", reflections: "memory_reflections" }[storeName];
+    if (!table) return;
+    const { error } = await supabaseClient.from(table).delete().eq("id", key);
+    if (error) throw error;
   }
 
   async function clearStore(storeName) {
@@ -1001,8 +1184,8 @@
         <div class="login-panel">
           <header class="page-header">
             <span class="eyebrow">ログイン</span>
-            <h1>あなたの思い出を、この端末で静かに守ります。</h1>
-            <p>Googleログインを使うと、将来のクラウド同期や複数端末対応へつなげやすくなります。今のMVPでは、写真と記録はこのブラウザ内に保存されます。</p>
+            <h1>あなたの思い出を、あなたのアカウントで守ります。</h1>
+            <p>Googleでログインすると、写真と記録を暗号化通信でSupabaseへ保存し、この端末のIndexedDBをオフライン用キャッシュとして使います。</p>
           </header>
           <div class="login-options">
             <div class="login-option">
@@ -1012,7 +1195,7 @@
                 ${googleReady ? `<span class="spinner" aria-hidden="true"></span><span>Googleログインを準備しています。</span>` : `<p class="auth-note">まだGoogleクライアントIDが設定されていません。</p>`}
               </div>
             </div>
-            <form id="localLoginForm" class="login-option">
+            ${state.debugPanelVisible ? `<form id="localLoginForm" class="login-option">
               <h2>ローカルで試す</h2>
               <p>開発中の確認用です。Google設定なしで、この端末だけのログイン状態を作れます。</p>
               <label class="field">
@@ -1020,9 +1203,9 @@
                 <input name="name" maxlength="80" placeholder="例：自分" autocomplete="name">
               </label>
               <button class="button" type="submit">この端末で始める</button>
-            </form>
+            </form>` : ""}
           </div>
-          <p class="form-note">ログアウトしても、IndexedDBに保存した思い出や写真は削除されません。</p>
+          <p class="form-note">ログアウトしても、Supabaseに保存した思い出や写真は削除されません。</p>
         </div>
       </section>
     `);
@@ -1660,9 +1843,21 @@
       render();
       return;
     }
+    if (supabaseClient) {
+      const { data, error } = await supabaseClient.auth.signInWithIdToken({
+        provider: "google",
+        token: response.credential
+      });
+      if (error || !data.user) {
+        state.error = "GoogleログインをSupabaseで確認できませんでした。少し待ってからもう一度お試しください。";
+        render();
+        return;
+      }
+      state.supabaseUser = data.user;
+    }
     await saveAuthSession({
       provider: "google",
-      userId: `google:${payload.sub}`,
+      userId: state.supabaseUser?.id || `google:${payload.sub}`,
       name: payload.name || payload.given_name || "Googleユーザー",
       email: payload.email || "",
       picture: payload.picture || "",
@@ -1693,6 +1888,8 @@
 
   async function logout() {
     if (window.google?.accounts?.id) window.google.accounts.id.disableAutoSelect();
+    if (supabaseClient) await supabaseClient.auth.signOut();
+    state.supabaseUser = null;
     await saveAuthSession(null);
     state.route = "login";
     state.activeMemoryId = "";
@@ -2318,10 +2515,12 @@
   });
 
   app.innerHTML = `<div class="loading" role="status"><span class="spinner" aria-hidden="true"></span><p>保存したデータを読み込んでいます。</p></div>`;
-  refresh().catch((error) => {
-    reportError("startup", error, "保存したデータを読み込めませんでした。ページを読み込み直して、もう一度お試しください。");
-    render();
-  });
+  initializeSupabaseAuth()
+    .then(refresh)
+    .catch((error) => {
+      reportError("startup", error, "保存したデータを読み込めませんでした。ページを読み込み直して、もう一度お試しください。");
+      render();
+    });
 })();
 
 

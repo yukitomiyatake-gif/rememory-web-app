@@ -23,6 +23,10 @@ python -m http.server 4173
 
 - ログイン画面
 - Google Identity Servicesを使ったGoogleログインの受け口
+- Supabase AuthへのGoogle IDトークン交換とセッション管理
+- ログインユーザーごとのクラウドデータ分離（RLS）
+- 思い出、断片、回答履歴のSupabase同期
+- 元画像と断片画像の非公開Supabase Storage同期
 - GoogleクライアントID未設定時の開発用ローカルログイン
 - 写真の撮影または端末内写真の選択
 - 写真を元画像BlobとしてIndexedDBへ保存
@@ -47,7 +51,20 @@ python -m http.server 4173
 クライアントIDが空の場合は、Googleログインの代わりに開発用のローカルログインを使えます。
 ローカルログインはこの端末・このブラウザだけの確認用です。
 
-現時点のMVPでは、ログインはアプリへの入口とユーザー表示のために使います。写真や記録は引き続きブラウザのIndexedDBへ保存され、クラウド同期は行いません。
+Googleログイン後は、写真と記録をSupabaseへ同期し、ブラウザのIndexedDBをオフライン用キャッシュとして併用します。
+
+## Supabase接続
+
+公開アプリは `rememory-web` プロジェクトへ接続します。
+
+- Project URL: `https://wwxgdysgpogfjdvecjoz.supabase.co`
+- Google認証: Google Identity ServicesのIDトークンをSupabase Authへ交換
+- IndexedDB: オフライン用キャッシュ
+- PostgreSQL: `profiles`、`memories`、`memory_fragments`、`memory_reflections`、`user_settings`
+- Storage: 非公開バケット `memory-images`
+- アクセス制御: `auth.uid()` を使ったRow Level Security
+
+所有者情報のない既存IndexedDBデータは、Supabase接続後に最初にログインしたGoogleアカウントへ一度だけ引き継がれます。それ以降はログインユーザーごとにデータが分離されます。
 
 ## 画像分析機能
 
