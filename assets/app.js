@@ -342,7 +342,13 @@
   }
 
   function reportError(context, error, message) {
-    console.error(`[re:Memory] ${context}`, error);
+    console.error(`[re:Memory] ${context}`, {
+      message: error?.message || String(error || ""),
+      code: error?.code,
+      details: error?.details,
+      hint: error?.hint,
+      status: error?.status
+    });
     state.error = message;
   }
 
@@ -758,8 +764,16 @@
     const images = await getAll("images");
     state.images = new Map(images.map((image) => [image.path, image]));
     if (state.supabaseUser) {
-      await migrateLegacyLocalData();
-      await loadCloudRecords();
+      try {
+        await migrateLegacyLocalData();
+        await loadCloudRecords();
+      } catch (error) {
+        reportError(
+          "cloud-load",
+          error,
+          "Googleログインは完了しました。クラウドの記録を読み込めなかったため、この端末の記録を表示しています。"
+        );
+      }
     }
     await normalizeLoadedMemories();
     await wakeDueMemories();
