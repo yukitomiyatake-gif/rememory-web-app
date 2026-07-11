@@ -832,6 +832,19 @@ summary {
   line-height: 1.7;
 }
 
+.login-legal {
+  margin: 4px 0 0;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.7;
+  text-align: center;
+}
+
+.login-legal a {
+  color: var(--color-text);
+  text-underline-offset: 3px;
+}
+
 .google-signin-button {
   display: grid;
   min-height: 44px;

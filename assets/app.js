@@ -1227,10 +1227,10 @@
       <footer class="app-footer">
         <p>© 2026 re:Memory</p>
         <nav class="app-footer-links" aria-label="フッターナビゲーション">
-          <span>re:Memoryについて</span>
-          <span>プライバシーポリシー</span>
-          <span>利用規約</span>
-          <span>お問い合わせ</span>
+          <a href="https://yukitomiyatake-gif.github.io/rememory-LP/">re:Memoryについて</a>
+          <a href="https://yukitomiyatake-gif.github.io/rememory-LP/privacy.html">プライバシーポリシー</a>
+          <a href="https://yukitomiyatake-gif.github.io/rememory-LP/terms.html">利用規約</a>
+          <a href="https://github.com/yukitomiyatake-gif">お問い合わせ</a>
         </nav>
       </footer>
     `;
@@ -1289,6 +1289,7 @@
             </form>` : ""}
           </div>
           <p class="form-note">Googleログインのデータは保存されます。ゲストのデータは保存されません。</p>
+          <p class="login-legal">続行すると、<a href="https://yukitomiyatake-gif.github.io/rememory-LP/terms.html">利用規約</a>と<a href="https://yukitomiyatake-gif.github.io/rememory-LP/privacy.html">プライバシーポリシー</a>に同意したものとみなされます。</p>
         </div>
       </section>
     `);
