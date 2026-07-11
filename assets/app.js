@@ -1900,8 +1900,28 @@
         token: response.credential
       });
       if (error || !data.user) {
-        state.error = "GoogleログインをSupabaseで確認できませんでした。少し待ってからもう一度お試しください。";
+        console.error("[re:Memory] Supabase Google sign-in failed", {
+          message: error?.message,
+          status: error?.status,
+          code: error?.code
+        });
+        state.error = "Googleアカウントの確認を続けます。表示されるGoogleの画面でもう一度アカウントを選んでください。";
         render();
+        const { error: redirectError } = await supabaseClient.auth.signInWithOAuth({
+          provider: "google",
+          options: {
+            redirectTo: `${window.location.origin}${window.location.pathname}`
+          }
+        });
+        if (redirectError) {
+          console.error("[re:Memory] Supabase Google redirect failed", {
+            message: redirectError.message,
+            status: redirectError.status,
+            code: redirectError.code
+          });
+          state.error = "Googleログインを開始できませんでした。設定を確認して、もう一度お試しください。";
+          render();
+        }
         return;
       }
       state.supabaseUser = data.user;
