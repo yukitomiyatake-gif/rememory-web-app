@@ -26,8 +26,8 @@
   const supabaseClient = window.supabase?.createClient && SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY
     ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
       auth: {
-        flowType: "pkce",
-        detectSessionInUrl: false,
+        flowType: "implicit",
+        detectSessionInUrl: true,
         persistSession: true
       }
     })
@@ -179,26 +179,9 @@
 
   async function initializeSupabaseAuth() {
     if (!supabaseClient) return;
-    const params = new URLSearchParams(window.location.search);
-    const authCode = params.get("code");
-    if (authCode) {
-      const { data: exchangeData, error: exchangeError } = await supabaseClient.auth.exchangeCodeForSession(authCode);
-      if (exchangeError) {
-        console.error("[re:Memory] Supabase OAuth code exchange failed", {
-          message: exchangeError.message,
-          status: exchangeError.status,
-          code: exchangeError.code
-        });
-        throw new Error("Googleログインの確認に失敗しました。開いているre:Memoryのタブを1つにして、もう一度お試しください。");
-      }
-      state.supabaseUser = exchangeData.session?.user || exchangeData.user || null;
-      params.delete("code");
-      const cleanSearch = params.toString();
-      window.history.replaceState({}, document.title, `${window.location.pathname}${cleanSearch ? `?${cleanSearch}` : ""}${window.location.hash}`);
-    }
     const { data, error } = await supabaseClient.auth.getSession();
     if (error) throw error;
-    state.supabaseUser = data.session?.user || state.supabaseUser || null;
+    state.supabaseUser = data.session?.user || null;
   }
 
   async function loadSettings() {
@@ -2684,10 +2667,7 @@
   initializeSupabaseAuth()
     .then(refresh)
     .catch((error) => {
-      const message = String(error?.message || "").startsWith("Googleログイン")
-        ? error.message
-        : "保存したデータを読み込めませんでした。ページを読み込み直して、もう一度お試しください。";
-      reportError("startup", error, message);
+      reportError("startup", error, "保存したデータを読み込めませんでした。ページを読み込み直して、もう一度お試しください。");
       render();
     });
 })();
