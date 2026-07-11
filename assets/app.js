@@ -179,9 +179,21 @@
 
   async function initializeSupabaseAuth() {
     if (!supabaseClient) return;
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    const accessToken = hashParams.get("access_token");
+    const refreshToken = hashParams.get("refresh_token");
+    if (accessToken && refreshToken) {
+      const { data: sessionData, error: sessionError } = await supabaseClient.auth.setSession({
+        access_token: accessToken,
+        refresh_token: refreshToken
+      });
+      if (sessionError) throw sessionError;
+      state.supabaseUser = sessionData.session?.user || sessionData.user || null;
+      window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`);
+    }
     const { data, error } = await supabaseClient.auth.getSession();
     if (error) throw error;
-    state.supabaseUser = data.session?.user || null;
+    state.supabaseUser = data.session?.user || state.supabaseUser || null;
   }
 
   async function loadSettings() {
