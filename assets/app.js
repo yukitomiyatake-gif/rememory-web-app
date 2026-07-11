@@ -49,7 +49,8 @@
     },
     googleButtonRendered: false,
     supabaseUser: null,
-    cloudSyncing: false
+    cloudSyncing: false,
+    guestMode: false
   };
 
   const statusLabels = {
@@ -132,7 +133,7 @@
 
   function normalizeAuthSession(value) {
     if (!value || typeof value !== "object") return null;
-    const provider = value.provider === "google" ? "google" : "local";
+    const provider = ["google", "local", "guest"].includes(value.provider) ? value.provider : "local";
     const userId = String(value.userId || "").trim();
     if (!userId) return null;
     return {
@@ -147,6 +148,7 @@
 
   function isSignedIn() {
     const session = normalizeAuthSession(state.settings.authSession);
+    if (state.guestMode && session?.provider === "guest") return true;
     if (session?.provider === "local") return true;
     return supabaseClient ? Boolean(state.supabaseUser) : Boolean(session);
   }
@@ -194,6 +196,7 @@
   }
 
   async function saveDebugSettings() {
+    if (state.guestMode) return;
     await saveSetting("debugMode", Boolean(state.settings.debugMode));
     await saveSetting("debugDayOffset", Number(state.settings.debugDayOffset || 0));
     await saveSetting("debugSelectedMemoryId", state.settings.debugSelectedMemoryId || "");
@@ -315,7 +318,9 @@
   }
 
   function authProviderLabel(provider) {
-    return provider === "google" ? "Google" : "ローカル";
+    if (provider === "google") return "Google";
+    if (provider === "guest") return "ゲスト";
+    return "ローカル";
   }
 
   function reportError(context, error, message) {
@@ -723,6 +728,11 @@
   }
 
   async function loadData() {
+    if (state.guestMode) {
+      await normalizeLoadedMemories();
+      await wakeDueMemories();
+      return;
+    }
     await loadSettings();
     state.memories = await getAll("memories");
     state.fragments = await getAll("fragments");
@@ -738,29 +748,58 @@
   }
 
   async function saveMemory(memory) {
+    if (state.guestMode) {
+      const index = state.memories.findIndex((item) => item.id === memory.id);
+      if (index >= 0) state.memories[index] = memory;
+      else state.memories.push(memory);
+      return;
+    }
     if (cloudUserId()) memory.ownerId = cloudUserId();
     await tx("memories", "readwrite", (store) => store.put(memory));
     if (cloudUserId() && !state.cloudSyncing) await upsertCloudRecord("memories", memoryCloudRow(memory));
   }
 
   async function saveFragment(fragment) {
+    if (state.guestMode) {
+      const index = state.fragments.findIndex((item) => item.id === fragment.id);
+      if (index >= 0) state.fragments[index] = fragment;
+      else state.fragments.push(fragment);
+      return;
+    }
     if (cloudUserId()) fragment.ownerId = cloudUserId();
     await tx("fragments", "readwrite", (store) => store.put(fragment));
     if (cloudUserId() && !state.cloudSyncing) await upsertCloudRecord("memory_fragments", fragmentCloudRow(fragment));
   }
 
   async function saveReflection(reflection) {
+    if (state.guestMode) {
+      const index = state.reflections.findIndex((item) => item.id === reflection.id);
+      if (index >= 0) state.reflections[index] = reflection;
+      else state.reflections.push(reflection);
+      return;
+    }
     if (cloudUserId()) reflection.ownerId = cloudUserId();
     await tx("reflections", "readwrite", (store) => store.put(reflection));
     if (cloudUserId() && !state.cloudSyncing) await upsertCloudRecord("memory_reflections", reflectionCloudRow(reflection));
   }
 
   async function saveImage(path, blob) {
+    if (state.guestMode) {
+      state.images.set(path, { path, blob, savedAt: realNowIso() });
+      return;
+    }
     await tx("images", "readwrite", (store) => store.put({ path, blob, savedAt: realNowIso() }));
     if (cloudUserId() && !state.cloudSyncing) await uploadCloudImage(path, blob);
   }
 
   async function deleteRecord(storeName, key) {
+    if (state.guestMode) {
+      if (storeName === "memories") state.memories = state.memories.filter((item) => item.id !== key);
+      if (storeName === "fragments") state.fragments = state.fragments.filter((item) => item.id !== key);
+      if (storeName === "reflections") state.reflections = state.reflections.filter((item) => item.id !== key);
+      if (storeName === "images") state.images.delete(key);
+      return;
+    }
     await tx(storeName, "readwrite", (store) => store.delete(key));
     if (!supabaseClient || !cloudUserId()) return;
     const table = { memories: "memories", fragments: "memory_fragments", reflections: "memory_reflections" }[storeName];
@@ -770,6 +809,13 @@
   }
 
   async function clearStore(storeName) {
+    if (state.guestMode) {
+      if (storeName === "memories") state.memories = [];
+      if (storeName === "fragments") state.fragments = [];
+      if (storeName === "reflections") state.reflections = [];
+      if (storeName === "images") state.images.clear();
+      return;
+    }
     await tx(storeName, "readwrite", (store) => store.clear());
   }
 
@@ -1195,6 +1241,11 @@
                 ${googleReady ? `<span class="spinner" aria-hidden="true"></span><span>Googleログインを準備しています。</span>` : `<p class="auth-note">まだGoogleクライアントIDが設定されていません。</p>`}
               </div>
             </div>
+            <div class="login-option">
+              <h2>ゲストとして試す</h2>
+              <p>登録せずにアプリを試せます。写真や記録はこのタブを閉じるか再読み込みすると消えます。</p>
+              <button class="button secondary" type="button" data-action="guest-login">ゲストとして始める</button>
+            </div>
             ${state.debugPanelVisible ? `<form id="localLoginForm" class="login-option">
               <h2>ローカルで試す</h2>
               <p>開発中の確認用です。Google設定なしで、この端末だけのログイン状態を作れます。</p>
@@ -1205,7 +1256,7 @@
               <button class="button" type="submit">この端末で始める</button>
             </form>` : ""}
           </div>
-          <p class="form-note">ログアウトしても、Supabaseに保存した思い出や写真は削除されません。</p>
+          <p class="form-note">Googleログインのデータは保存されます。ゲストのデータは保存されません。</p>
         </div>
       </section>
     `);
@@ -1869,6 +1920,38 @@
     resetViewPosition();
   }
 
+  function clearGuestData() {
+    for (const url of state.urls.values()) URL.revokeObjectURL(url);
+    state.memories = [];
+    state.fragments = [];
+    state.reflections = [];
+    state.images = new Map();
+    state.urls = new Map();
+    state.selectedFile = null;
+    if (state.selectedPreviewUrl) URL.revokeObjectURL(state.selectedPreviewUrl);
+    state.selectedPreviewUrl = "";
+    state.activeMemoryId = "";
+    state.transientOriginalMemoryId = "";
+  }
+
+  async function handleGuestLogin() {
+    clearGuestData();
+    state.guestMode = true;
+    state.supabaseUser = null;
+    state.settings.authSession = normalizeAuthSession({
+      provider: "guest",
+      userId: "guest-session",
+      name: "ゲスト",
+      email: "",
+      picture: "",
+      signedInAt: realNowIso()
+    });
+    state.error = "";
+    state.route = "home";
+    await refresh();
+    resetViewPosition();
+  }
+
   async function handleLocalLogin(form) {
     const formData = new FormData(form);
     const name = String(formData.get("name") || "").trim() || "re:Memoryユーザー";
@@ -1887,6 +1970,15 @@
   }
 
   async function logout() {
+    if (state.guestMode) {
+      clearGuestData();
+      state.guestMode = false;
+      state.settings.authSession = null;
+      state.route = "login";
+      render();
+      resetViewPosition();
+      return;
+    }
     if (window.google?.accounts?.id) window.google.accounts.id.disableAutoSelect();
     if (supabaseClient) await supabaseClient.auth.signOut();
     state.supabaseUser = null;
@@ -2463,6 +2555,10 @@
     }
     if (action === "logout") {
       await logout();
+      return;
+    }
+    if (action === "guest-login") {
+      await handleGuestLogin();
       return;
     }
     if (action === "retake") {

@@ -22,6 +22,7 @@ python -m http.server 4173
 - ログイン画面
 - Google Identity Servicesを使ったGoogleログインの受け口
 - Supabase AuthへのGoogle IDトークン交換とセッション管理
+- 保存なしで一時的に試せるゲストログイン
 - ログインユーザーごとのクラウドデータ分離（RLS）
 - 思い出、断片、回答履歴のSupabase同期
 - 元画像と断片画像の非公開Supabase Storage同期
@@ -63,6 +64,8 @@ Googleログイン後は、写真と記録をSupabaseへ同期し、ブラウザ
 - アクセス制御: `auth.uid()` を使ったRow Level Security
 
 所有者情報のない既存IndexedDBデータは、Supabase接続後に最初にログインしたGoogleアカウントへ一度だけ引き継がれます。それ以降はログインユーザーごとにデータが分離されます。
+
+ゲストログイン中の写真、思い出、断片、回答はメモリ内だけで扱います。IndexedDBとSupabaseには保存されず、再読み込み、タブを閉じる操作、ログアウトのいずれかで破棄されます。
 
 ## 画像分析機能
 
