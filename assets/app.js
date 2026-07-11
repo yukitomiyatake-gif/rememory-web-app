@@ -24,7 +24,13 @@
   const SUPABASE_URL = document.querySelector('meta[name="supabase-url"]')?.content?.trim() || "";
   const SUPABASE_PUBLISHABLE_KEY = document.querySelector('meta[name="supabase-publishable-key"]')?.content?.trim() || "";
   const supabaseClient = window.supabase?.createClient && SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY
-    ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
+    ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+      auth: {
+        flowType: "pkce",
+        detectSessionInUrl: true,
+        persistSession: true
+      }
+    })
     : null;
   const LOCAL_AUTH_USER_ID = "local-rememory-user";
   const state = {
@@ -1224,7 +1230,7 @@
 
   function renderLogin() {
     state.googleButtonRendered = false;
-    const googleReady = Boolean(GOOGLE_CLIENT_ID);
+    const googleReady = Boolean(supabaseClient);
     return shell(`
       <section class="login-stage">
         <div class="login-panel">
@@ -1236,10 +1242,10 @@
           <div class="login-options">
             <div class="login-option">
               <h2>Googleで続ける</h2>
-              <p>Google Cloudで発行したクライアントIDを設定すると使えます。</p>
-              <div id="googleSignInButton" class="google-signin-button" aria-live="polite">
-                ${googleReady ? `<span class="spinner" aria-hidden="true"></span><span>Googleログインを準備しています。</span>` : `<p class="auth-note">まだGoogleクライアントIDが設定されていません。</p>`}
-              </div>
+              <p>Googleアカウントを選び、安全にログインします。</p>
+              ${googleReady
+                ? `<button class="button google-oauth-button" type="button" data-action="google-oauth">Googleでログイン</button>`
+                : `<p class="auth-note">Googleログインを準備できませんでした。</p>`}
             </div>
             <div class="login-option">
               <h2>ゲストとして試す</h2>
@@ -1940,6 +1946,29 @@
     resetViewPosition();
   }
 
+  async function startGoogleOAuth() {
+    if (!supabaseClient || state.busy) return;
+    state.busy = true;
+    state.error = "";
+    render();
+    const { error } = await supabaseClient.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: `${window.location.origin}${window.location.pathname}`
+      }
+    });
+    if (error) {
+      console.error("[re:Memory] Supabase Google redirect failed", {
+        message: error.message,
+        status: error.status,
+        code: error.code
+      });
+      state.busy = false;
+      state.error = "Googleログインを開始できませんでした。少し待ってから、もう一度お試しください。";
+      render();
+    }
+  }
+
   function clearGuestData() {
     for (const url of state.urls.values()) URL.revokeObjectURL(url);
     state.memories = [];
@@ -2579,6 +2608,10 @@
     }
     if (action === "guest-login") {
       await handleGuestLogin();
+      return;
+    }
+    if (action === "google-oauth") {
+      await startGoogleOAuth();
       return;
     }
     if (action === "retake") {
