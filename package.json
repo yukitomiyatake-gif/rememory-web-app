@@ -1,0 +1,7 @@
+{
+  "name": "rememory-web-app",
+  "private": true,
+  "scripts": {
+    "test": "node --check assets/app.js && node tests/security-audit.mjs"
+  }
+}

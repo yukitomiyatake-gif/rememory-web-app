@@ -808,6 +808,10 @@ summary {
   gap: 14px;
 }
 
+.production-login-options {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .login-option {
   display: grid;
   min-width: 0;
@@ -1556,6 +1560,35 @@ select:focus {
   margin-bottom: 30px;
 }
 
+.account-security {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-top: 48px;
+  padding: 24px 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.account-security > div {
+  display: grid;
+  gap: 6px;
+}
+
+.account-security h2 {
+  font-size: 18px;
+}
+
+.account-security p {
+  max-width: 620px;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.account-security .button {
+  flex: 0 0 auto;
+}
+
 .memory-group {
   padding-top: 30px;
   border-top: 1px solid var(--color-border);
@@ -1603,158 +1636,6 @@ select:focus {
   clip: rect(0, 0, 0, 0) !important;
   white-space: nowrap !important;
   border: 0 !important;
-}
-
-.debug-menu {
-  margin: 14px 0 22px;
-  overflow: hidden;
-  color: #fffdf8;
-  background: #263b35;
-  border-radius: var(--radius-md);
-}
-
-.debug-menu summary {
-  display: flex;
-  min-height: 52px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 15px;
-  cursor: pointer;
-  font-weight: 760;
-}
-
-.debug-menu summary small {
-  color: rgba(255, 253, 248, 0.68);
-  font-size: 12px;
-}
-
-.debug-topline {
-  display: grid;
-  grid-template-columns: minmax(180px, 0.42fr) minmax(240px, 1fr);
-  gap: 10px;
-  padding: 0 14px 12px;
-}
-
-.debug-switch,
-.debug-select,
-.debug-panel,
-.debug-workflow section {
-  padding: 11px;
-  background: rgba(255, 255, 255, 0.07);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: var(--radius-md);
-}
-
-.debug-switch {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 760;
-}
-
-.debug-switch input {
-  width: auto;
-  min-height: 0;
-}
-
-.debug-select {
-  display: grid;
-  gap: 6px;
-}
-
-.debug-select > span {
-  color: rgba(255, 253, 248, 0.7);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.debug-select select {
-  min-height: 40px;
-}
-
-.debug-panels,
-.debug-workflow {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  padding: 0 14px 14px;
-}
-
-.debug-panel h3,
-.debug-workflow h3 {
-  margin: 0 0 8px;
-  color: #fffdf8;
-  font-size: 14px;
-}
-
-.debug-panel dl {
-  display: grid;
-  gap: 6px;
-}
-
-.debug-panel dl div {
-  display: grid;
-  grid-template-columns: minmax(104px, 0.4fr) minmax(0, 1fr);
-  gap: 8px;
-}
-
-.debug-panel dt {
-  color: rgba(255, 253, 248, 0.74);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.debug-panel dd {
-  color: #fffdf8;
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-
-.debug-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.debug-actions .button {
-  min-width: 0;
-  min-height: 42px;
-  padding: 8px 12px;
-  box-shadow: none;
-}
-
-.debug-danger {
-  border-color: rgba(242, 227, 218, 0.26) !important;
-}
-
-.debug-analysis {
-  margin: 0 14px 14px;
-}
-
-.debug-table-wrap {
-  overflow-x: auto;
-}
-
-.debug-table {
-  width: 100%;
-  min-width: 860px;
-  border-collapse: collapse;
-  color: #fffdf8;
-  font-size: 12px;
-}
-
-.debug-table th,
-.debug-table td {
-  padding: 7px 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.13);
-  text-align: left;
-  vertical-align: top;
-}
-
-.debug-table th {
-  color: rgba(255, 253, 248, 0.74);
 }
 
 .hidden {
@@ -1819,11 +1700,6 @@ select:focus {
     margin: 0 auto;
   }
 
-  .debug-topline,
-  .debug-panels,
-  .debug-workflow {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (max-width: 720px) {
@@ -1962,7 +1838,8 @@ select:focus {
 
   .capture-actions,
   .button-row,
-  .decision-actions {
+  .decision-actions,
+  .account-security {
     display: grid;
     grid-template-columns: 1fr;
   }
@@ -1970,6 +1847,7 @@ select:focus {
   .capture-actions .button,
   .button-row .button,
   .decision-actions .button,
+  .account-security .button,
   .form-actions .button {
     width: 100%;
     min-width: 0;
@@ -2056,10 +1934,6 @@ select:focus {
     gap: 3px;
   }
 
-  .debug-menu summary {
-    align-items: flex-start;
-    flex-direction: column;
-  }
 }
 
 @media (max-width: 359px) {

@@ -12,6 +12,10 @@
   const REQUIRED_HIDDEN_FRAGMENT_INDEX = 4;
   const OPTIONAL_HIDDEN_FRAGMENT_INDEXES = [3, 5, 1, 7];
   const ANALYSIS_VERSION = 1;
+  const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+  const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
+  const MAX_IMAGE_DIMENSION = 12000;
+  const MAX_IMAGE_PIXELS = 40_000_000;
   const REUNION_TIMING_OPTIONS = {
     1: "1日後",
     7: "7日後",
@@ -20,19 +24,18 @@
     365: "365日後"
   };
   const app = document.querySelector("#app");
-  const GOOGLE_CLIENT_ID = document.querySelector('meta[name="google-client-id"]')?.content?.trim() || "";
   const SUPABASE_URL = document.querySelector('meta[name="supabase-url"]')?.content?.trim() || "";
   const SUPABASE_PUBLISHABLE_KEY = document.querySelector('meta[name="supabase-publishable-key"]')?.content?.trim() || "";
   const supabaseClient = window.supabase?.createClient && SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY
     ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
       auth: {
-        flowType: "implicit",
+        flowType: "pkce",
         detectSessionInUrl: true,
-        persistSession: true
+        persistSession: true,
+        autoRefreshToken: true
       }
     })
     : null;
-  const LOCAL_AUTH_USER_ID = "local-rememory-user";
   const state = {
     route: "home",
     memories: [],
@@ -46,17 +49,11 @@
     transientOriginalMemoryId: "",
     busy: false,
     error: "",
-    debugPanelVisible: new URLSearchParams(location.search).get("debug") === "1",
     settings: {
-      debugMode: false,
-      debugDayOffset: 0,
-      debugSelectedMemoryId: "",
       authSession: null
     },
-    googleButtonRendered: false,
     supabaseUser: null,
-    cloudSyncing: false,
-    guestMode: false
+    cloudSyncing: false
   };
 
   const statusLabels = {
@@ -139,11 +136,11 @@
 
   function normalizeAuthSession(value) {
     if (!value || typeof value !== "object") return null;
-    const provider = ["google", "local", "guest"].includes(value.provider) ? value.provider : "local";
+    if (value.provider !== "google") return null;
     const userId = String(value.userId || "").trim();
     if (!userId) return null;
     return {
-      provider,
+      provider: "google",
       userId,
       name: String(value.name || "re:Memoryユーザー").trim() || "re:Memoryユーザー",
       email: String(value.email || "").trim(),
@@ -153,10 +150,7 @@
   }
 
   function isSignedIn() {
-    const session = normalizeAuthSession(state.settings.authSession);
-    if (state.guestMode && session?.provider === "guest") return true;
-    if (session?.provider === "local") return true;
-    return supabaseClient ? Boolean(state.supabaseUser) : Boolean(session);
+    return Boolean(supabaseClient && state.supabaseUser);
   }
 
   async function saveAuthSession(session) {
@@ -179,28 +173,13 @@
 
   async function initializeSupabaseAuth() {
     if (!supabaseClient) return;
-    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-    const accessToken = hashParams.get("access_token");
-    const refreshToken = hashParams.get("refresh_token");
-    if (accessToken && refreshToken) {
-      const { data: sessionData, error: sessionError } = await supabaseClient.auth.setSession({
-        access_token: accessToken,
-        refresh_token: refreshToken
-      });
-      if (sessionError) throw sessionError;
-      state.supabaseUser = sessionData.session?.user || sessionData.user || null;
-      window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`);
-    }
     const { data, error } = await supabaseClient.auth.getSession();
     if (error) throw error;
-    state.supabaseUser = data.session?.user || state.supabaseUser || null;
+    state.supabaseUser = data.session?.user || null;
   }
 
   async function loadSettings() {
     state.settings = {
-      debugMode: Boolean(await getSetting("debugMode", false)),
-      debugDayOffset: Number(await getSetting("debugDayOffset", 0) || 0),
-      debugSelectedMemoryId: String(await getSetting("debugSelectedMemoryId", "") || ""),
       authSession: normalizeAuthSession(await getSetting("authSession", null))
     };
     if (state.supabaseUser) {
@@ -208,20 +187,11 @@
     } else if (supabaseClient && state.settings.authSession?.provider === "google") {
       state.settings.authSession = null;
     }
-    if (!state.activeMemoryId && state.settings.debugSelectedMemoryId) {
-      state.activeMemoryId = state.settings.debugSelectedMemoryId;
-    }
-  }
-
-  async function saveDebugSettings() {
-    if (state.guestMode) return;
-    await saveSetting("debugMode", Boolean(state.settings.debugMode));
-    await saveSetting("debugDayOffset", Number(state.settings.debugDayOffset || 0));
-    await saveSetting("debugSelectedMemoryId", state.settings.debugSelectedMemoryId || "");
   }
 
   function id(prefix) {
-    return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
+    const randomId = crypto.randomUUID ? crypto.randomUUID() : [...crypto.getRandomValues(new Uint8Array(16))].map((value) => value.toString(16).padStart(2, "0")).join("");
+    return `${prefix}_${randomId}`;
   }
 
   function realNow() {
@@ -233,9 +203,7 @@
   }
 
   function appNow() {
-    const date = realNow();
-    if (state.settings.debugMode) date.setDate(date.getDate() + Number(state.settings.debugDayOffset || 0));
-    return date;
+    return realNow();
   }
 
   function appNowIso() {
@@ -317,38 +285,7 @@
       .replaceAll("'", "&#039;");
   }
 
-  function parseJwtPayload(token) {
-    try {
-      const payload = String(token || "").split(".")[1];
-      if (!payload) return null;
-      const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
-      const decoded = decodeURIComponent(
-        atob(normalized)
-          .split("")
-          .map((char) => `%${char.charCodeAt(0).toString(16).padStart(2, "0")}`)
-          .join("")
-      );
-      return JSON.parse(decoded);
-    } catch (error) {
-      console.warn("[re:Memory] Google credentialを読み取れませんでした", error);
-      return null;
-    }
-  }
-
-  function authProviderLabel(provider) {
-    if (provider === "google") return "Google";
-    if (provider === "guest") return "ゲスト";
-    return "ローカル";
-  }
-
-  function reportError(context, error, message) {
-    console.error(`[re:Memory] ${context}`, {
-      message: error?.message || String(error || ""),
-      code: error?.code,
-      details: error?.details,
-      hint: error?.hint,
-      status: error?.status
-    });
+  function reportError(_context, _error, message) {
     state.error = message;
   }
 
@@ -519,7 +456,7 @@
     } catch (error) {
       return {
         ...defaultFragmentAnalysis(index, "failed"),
-        analysisReason: `analysis-failed:${error.message || "unknown"}`
+        analysisReason: "analysis-failed"
       };
     }
   }
@@ -751,87 +688,83 @@
     }
   }
 
+  function clearRuntimeData() {
+    for (const url of state.urls.values()) URL.revokeObjectURL(url);
+    if (state.selectedPreviewUrl) URL.revokeObjectURL(state.selectedPreviewUrl);
+    state.memories = [];
+    state.fragments = [];
+    state.reflections = [];
+    state.images = new Map();
+    state.urls = new Map();
+    state.activeMemoryId = "";
+    state.transientOriginalMemoryId = "";
+    state.selectedFile = null;
+    state.selectedPreviewUrl = "";
+  }
+
+  function filterLocalCacheForUser(userId) {
+    const ownedMemories = state.memories.filter((memory) => memory.ownerId === userId);
+    const ownedMemoryIds = new Set(ownedMemories.map((memory) => memory.id));
+    state.memories = ownedMemories;
+    state.fragments = state.fragments.filter((fragment) => fragment.ownerId === userId && ownedMemoryIds.has(fragment.memoryId));
+    state.reflections = state.reflections.filter((reflection) => reflection.ownerId === userId && ownedMemoryIds.has(reflection.memoryId));
+    state.images = new Map(
+      [...state.images].filter(([path]) => [...ownedMemoryIds].some((memoryId) => String(path).includes(`/${memoryId}/`)))
+    );
+  }
+
   async function loadData() {
-    if (state.guestMode) {
-      await normalizeLoadedMemories();
-      await wakeDueMemories();
+    await loadSettings();
+    const userId = cloudUserId();
+    if (!userId) {
+      clearRuntimeData();
       return;
     }
-    await loadSettings();
     state.memories = await getAll("memories");
     state.fragments = await getAll("fragments");
     state.reflections = await getAll("reflections");
     const images = await getAll("images");
     state.images = new Map(images.map((image) => [image.path, image]));
-    if (state.supabaseUser) {
-      try {
-        await migrateLegacyLocalData();
-        await loadCloudRecords();
-      } catch (error) {
-        reportError(
-          "cloud-load",
-          error,
-          "Googleログインは完了しました。クラウドの記録を読み込めなかったため、この端末の記録を表示しています。"
-        );
-      }
+    try {
+      await migrateLegacyLocalData();
+      filterLocalCacheForUser(userId);
+      await loadCloudRecords();
+    } catch (error) {
+      filterLocalCacheForUser(userId);
+      reportError(
+        "cloud-load",
+        error,
+        "Googleログインは完了しました。クラウドの記録を読み込めなかったため、このアカウントの端末内キャッシュだけを表示しています。"
+      );
     }
     await normalizeLoadedMemories();
     await wakeDueMemories();
   }
 
   async function saveMemory(memory) {
-    if (state.guestMode) {
-      const index = state.memories.findIndex((item) => item.id === memory.id);
-      if (index >= 0) state.memories[index] = memory;
-      else state.memories.push(memory);
-      return;
-    }
     if (cloudUserId()) memory.ownerId = cloudUserId();
     await tx("memories", "readwrite", (store) => store.put(memory));
     if (cloudUserId() && !state.cloudSyncing) await upsertCloudRecord("memories", memoryCloudRow(memory));
   }
 
   async function saveFragment(fragment) {
-    if (state.guestMode) {
-      const index = state.fragments.findIndex((item) => item.id === fragment.id);
-      if (index >= 0) state.fragments[index] = fragment;
-      else state.fragments.push(fragment);
-      return;
-    }
     if (cloudUserId()) fragment.ownerId = cloudUserId();
     await tx("fragments", "readwrite", (store) => store.put(fragment));
     if (cloudUserId() && !state.cloudSyncing) await upsertCloudRecord("memory_fragments", fragmentCloudRow(fragment));
   }
 
   async function saveReflection(reflection) {
-    if (state.guestMode) {
-      const index = state.reflections.findIndex((item) => item.id === reflection.id);
-      if (index >= 0) state.reflections[index] = reflection;
-      else state.reflections.push(reflection);
-      return;
-    }
     if (cloudUserId()) reflection.ownerId = cloudUserId();
     await tx("reflections", "readwrite", (store) => store.put(reflection));
     if (cloudUserId() && !state.cloudSyncing) await upsertCloudRecord("memory_reflections", reflectionCloudRow(reflection));
   }
 
   async function saveImage(path, blob) {
-    if (state.guestMode) {
-      state.images.set(path, { path, blob, savedAt: realNowIso() });
-      return;
-    }
     await tx("images", "readwrite", (store) => store.put({ path, blob, savedAt: realNowIso() }));
     if (cloudUserId() && !state.cloudSyncing) await uploadCloudImage(path, blob);
   }
 
   async function deleteRecord(storeName, key) {
-    if (state.guestMode) {
-      if (storeName === "memories") state.memories = state.memories.filter((item) => item.id !== key);
-      if (storeName === "fragments") state.fragments = state.fragments.filter((item) => item.id !== key);
-      if (storeName === "reflections") state.reflections = state.reflections.filter((item) => item.id !== key);
-      if (storeName === "images") state.images.delete(key);
-      return;
-    }
     await tx(storeName, "readwrite", (store) => store.delete(key));
     if (!supabaseClient || !cloudUserId()) return;
     const table = { memories: "memories", fragments: "memory_fragments", reflections: "memory_reflections" }[storeName];
@@ -841,13 +774,6 @@
   }
 
   async function clearStore(storeName) {
-    if (state.guestMode) {
-      if (storeName === "memories") state.memories = [];
-      if (storeName === "fragments") state.fragments = [];
-      if (storeName === "reflections") state.reflections = [];
-      if (storeName === "images") state.images.clear();
-      return;
-    }
     await tx(storeName, "readwrite", (store) => store.clear());
   }
 
@@ -936,8 +862,7 @@
         changed = true;
       }
       const isSameRealDayAsCreated = memory.createdAt && localDateKey(memory.createdAt) === localDateKey(realNow());
-      const isUnansweredImmediateMemory = !state.settings.debugMode
-        && memory.status === "fragmenting"
+      const isUnansweredImmediateMemory = memory.status === "fragmenting"
         && Number(memory.currentStage || 1) === 1
         && memoryReflections.length === 0
         && isSameRealDayAsCreated
@@ -1031,48 +956,6 @@
     await saveFragment(fragment);
     return fragment;
   }
-  async function analyzeStoredMemoryFragments(memory) {
-    const fragments = sortedFragments(memory.id);
-    for (const fragment of fragments) {
-      const image = state.images.get(fragment.imagePath);
-      if (!image?.blob) {
-        Object.assign(fragment, defaultFragmentAnalysis(fragment.index, "failed"), { analysisReason: "fragment-blob-missing" });
-        await saveFragment(fragment);
-        continue;
-      }
-      const bitmap = await createBitmap(image.blob);
-      const canvas = document.createElement("canvas");
-      canvas.width = bitmap.width;
-      canvas.height = bitmap.height;
-      canvas.getContext("2d").drawImage(bitmap, 0, 0);
-      Object.assign(fragment, analyzeFragmentCanvas(canvas, fragment.index));
-      await saveFragment(fragment);
-    }
-    const ordering = decideFragmentOrdering(fragments);
-    memory.hiddenFragmentIndexes = ordering.hiddenFragmentIndexes;
-    memory.displayOrder = ordering.displayOrder;
-    memory.imageAnalysisStatus = fragments.some((fragment) => fragment.analysisStatus === "completed") ? "completed" : "fallback";
-    memory.imageAnalysisVersion = ANALYSIS_VERSION;
-    if (!memory.hasViewedOriginal) {
-      for (const fragment of fragments) {
-        if (memory.hiddenFragmentIndexes.includes(fragment.index) && fragment.isUnlocked) {
-          fragment.isUnlocked = false;
-          fragment.unlockedAt = "";
-          await saveFragment(fragment);
-        }
-      }
-    }
-    await saveMemory(memory);
-  }
-  async function resetFragments(memoryId) {
-    const fragments = byMemory(memoryId, state.fragments);
-    for (const fragment of fragments) {
-      fragment.isUnlocked = false;
-      fragment.unlockedAt = "";
-      await saveFragment(fragment);
-    }
-  }
-
   function canReflectToday(memory) {
     return memory.status === "fragmenting"
       && Number(memory.currentStage || 1) <= 4
@@ -1171,6 +1054,7 @@
     normalized.width = width;
     normalized.height = height;
     normalized.getContext("2d").drawImage(bitmap, 0, 0, width, height);
+    const normalizedOriginalBlob = await canvasToBlob(normalized, "image/jpeg", 0.92);
 
     const fragmentWidth = width / 3;
     const fragmentHeight = height / 3;
@@ -1199,8 +1083,9 @@
         ...analysis
       });
     }
+    if (typeof bitmap.close === "function") bitmap.close();
     const ordering = decideFragmentOrdering(fragments);
-    return { fragments, width, height, ...ordering };
+    return { fragments, width, height, originalBlob: normalizedOriginalBlob, ...ordering };
   }
 
   function shell(content) {
@@ -1218,7 +1103,6 @@
         </nav>
         ${renderAuthArea()}
       </header>
-      ${state.debugPanelVisible ? renderDebugMenu() : ""}
       ${state.error ? `<div class="error" role="alert"><strong>続けられませんでした</strong><p>${escapeHtml(state.error)}</p></div>` : ""}
       ${state.busy ? `<div class="busy-indicator" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span>処理中です。しばらくお待ちください。</span></div>` : ""}
       <main id="main-content" class="screen" tabindex="-1">
@@ -1247,7 +1131,7 @@
         ${session.picture ? `<img class="auth-avatar" src="${escapeHtml(session.picture)}" alt="">` : `<span class="auth-avatar fallback" aria-hidden="true">${initial}</span>`}
         <div class="auth-user">
           <strong>${escapeHtml(session.name)}</strong>
-          <span>${escapeHtml(authProviderLabel(session.provider))}でログイン中</span>
+          <span>Googleでログイン中</span>
         </div>
         <button class="auth-link" type="button" data-action="logout">ログアウト</button>
       </div>
@@ -1255,7 +1139,6 @@
   }
 
   function renderLogin() {
-    state.googleButtonRendered = false;
     const googleReady = Boolean(supabaseClient);
     return shell(`
       <section class="login-stage">
@@ -1265,7 +1148,7 @@
             <h1>あなたの思い出を、あなたのアカウントで守ります。</h1>
             <p>Googleでログインすると、写真と記録を暗号化通信でSupabaseへ保存し、この端末のIndexedDBをオフライン用キャッシュとして使います。</p>
           </header>
-          <div class="login-options">
+          <div class="login-options production-login-options">
             <div class="login-option">
               <h2>Googleで続ける</h2>
               <p>Googleアカウントを選び、安全にログインします。</p>
@@ -1273,145 +1156,14 @@
                 ? `<button class="button google-oauth-button" type="button" data-action="google-oauth">Googleでログイン</button>`
                 : `<p class="auth-note">Googleログインを準備できませんでした。</p>`}
             </div>
-            <div class="login-option">
-              <h2>ゲストとして試す</h2>
-              <p>登録せずにアプリを試せます。写真や記録はこのタブを閉じるか再読み込みすると消えます。</p>
-              <button class="button secondary" type="button" data-action="guest-login">ゲストとして始める</button>
-            </div>
-            ${state.debugPanelVisible ? `<form id="localLoginForm" class="login-option">
-              <h2>ローカルで試す</h2>
-              <p>開発中の確認用です。Google設定なしで、この端末だけのログイン状態を作れます。</p>
-              <label class="field">
-                <span class="field-label">表示名</span>
-                <input name="name" maxlength="80" placeholder="例：自分" autocomplete="name">
-              </label>
-              <button class="button" type="submit">この端末で始める</button>
-            </form>` : ""}
           </div>
-          <p class="form-note">Googleログインのデータは保存されます。ゲストのデータは保存されません。</p>
+          <p class="form-note">ログイン後の写真と記録は、アカウントごとに分離して保存されます。</p>
           <p class="login-legal">続行すると、<a href="https://yukitomiyatake-gif.github.io/rememory-LP/terms.html">利用規約</a>と<a href="https://yukitomiyatake-gif.github.io/rememory-LP/privacy.html">プライバシーポリシー</a>に同意したものとみなされます。</p>
         </div>
       </section>
     `);
   }
 
-  function selectedDebugMemory() {
-    const selectedId = state.settings.debugSelectedMemoryId || state.activeMemoryId;
-    return state.memories.find((memory) => memory.id === selectedId) || state.memories[0] || null;
-  }
-
-  function renderDebugMenu() {
-    const memory = selectedDebugMemory();
-    const fragments = memory ? sortedFragments(memory.id) : [];
-    const previewUnlocked = memory ? fragments.filter((fragment) => fragment.isUnlocked && !isHiddenUntilOriginal(memory, fragment)).length : 0;
-    const reflections = memory ? sortedReflections(memory.id) : [];
-    const last = reflections[reflections.length - 1];
-    const memoryOptions = state.memories.map((item) => {
-      const selected = memory?.id === item.id ? "selected" : "";
-      const label = `${item.title || "名前のない思い出"} / ${statusLabels[item.status] || item.status}`;
-      return `<option value="${item.id}" ${selected}>${escapeHtml(label)}</option>`;
-    }).join("");
-    return `
-      <details class="debug-menu" open>
-        <summary>
-          <span>開発用メニュー</span>
-          <small>${state.settings.debugMode ? "開発モードON" : "開発モードOFF"} / offset ${Number(state.settings.debugDayOffset || 0)}日</small>
-        </summary>
-        <div class="debug-topline">
-          <label class="debug-switch">
-            <input type="checkbox" data-debug-toggle ${state.settings.debugMode ? "checked" : ""}>
-            <span>開発モード</span>
-          </label>
-          <label class="debug-select">
-            <span>対象の思い出</span>
-            <select data-debug-memory-select ${state.memories.length ? "" : "disabled"}>
-              ${memoryOptions || `<option>思い出がありません</option>`}
-            </select>
-          </label>
-        </div>
-        <div class="debug-panels">
-          <section class="debug-panel">
-            <h3>日時</h3>
-            <dl>
-              <div><dt>実際の現在日時</dt><dd>${formatDate(realNowIso())}</dd></div>
-              <div><dt>アプリ内の判定日時</dt><dd>${formatDate(appNowIso())}</dd></div>
-              <div><dt>debugDayOffset</dt><dd>${Number(state.settings.debugDayOffset || 0)}日</dd></div>
-            </dl>
-            <div class="debug-actions">
-              <button class="button soft" type="button" data-debug-action="advance-1">1日進める</button>
-              <button class="button soft" type="button" data-debug-action="advance-7">7日進める</button>
-              <button class="button secondary" type="button" data-debug-action="reset-offset">今日に戻す</button>
-            </div>
-          </section>
-          <section class="debug-panel">
-            <h3>選択中の思い出</h3>
-            <dl>
-              <div><dt>ID</dt><dd>${escapeHtml(memory?.id || "未選択")}</dd></div>
-              <div><dt>status</dt><dd>${escapeHtml(memory?.status || "未選択")}</dd></div>
-              <div><dt>現在のステージ</dt><dd>${escapeHtml(memory ? stageLabel(memory) : "未選択")}</dd></div>
-              <div><dt>最終回答日</dt><dd>${escapeHtml(memory?.lastReflectedDate || "なし")}</dd></div>
-              <div><dt>次回表示日</dt><dd>${memory ? formatDate(nextDisplayDate(memory)) : "未選択"}</dd></div>
-              <div><dt>表示中のかけら</dt><dd>${previewUnlocked}/7</dd></div>
-              <div><dt>最後まで隠すかけら</dt><dd>${escapeHtml(memory?.hiddenFragmentIndexes?.join(", ") || "未設定")}</dd></div>
-              <div><dt>分析状態</dt><dd>${escapeHtml(memory?.imageAnalysisStatus || "fallback")}</dd></div>
-              <div><dt>最新履歴</dt><dd>${escapeHtml(last?.reflectionType || "なし")}</dd></div>
-            </dl>
-          </section>
-        </div>
-        ${memory ? renderDebugAnalysisTable(memory, fragments) : ""}
-        <div class="debug-workflow">
-          <section>
-            <h3>フロー操作</h3>
-            <div class="debug-actions">
-              <button class="button secondary" type="button" data-debug-action="clear-today" ${memory ? "" : "disabled"}>今日の制限を解除</button>
-              <button class="button secondary" type="button" data-debug-action="next-answer-day" ${memory ? "" : "disabled"}>次回の回答日へ進める</button>
-              <button class="button secondary" type="button" data-debug-action="to-choice" ${memory ? "" : "disabled"}>写真を見るか選ぶ画面まで進める</button>
-              <button class="button secondary" type="button" data-debug-action="reanalyze" ${memory ? "" : "disabled"}>画像を再分析</button>
-              <button class="button secondary" type="button" data-debug-action="reset-memory" ${memory ? "" : "disabled"}>この思い出を最初からやり直す</button>
-            </div>
-          </section>
-          <section class="debug-danger">
-            <h3>危険操作</h3>
-            <div class="debug-actions">
-              <button class="button danger-soft" type="button" data-debug-action="delete-all">開発用データをすべて削除</button>
-            </div>
-          </section>
-        </div>
-      </details>
-    `;
-  }
-
-  function renderDebugAnalysisTable(memory, fragments) {
-    const hiddenSet = new Set(normalizeHiddenFragmentIndexes(memory.hiddenFragmentIndexes));
-    const rows = fragments
-      .slice()
-      .sort((a, b) => a.index - b.index)
-      .map((fragment) => `
-        <tr>
-          <td>${fragment.index}</td>
-          <td>${escapeHtml(fragment.analysisLabels?.join(", ") || "-")}</td>
-          <td>${fragment.containsFace ? "yes" : "-"}</td>
-          <td>${fragment.containsPerson ? "yes" : "-"}</td>
-          <td>${fragment.containsText ? "yes" : "-"}</td>
-          <td>${Number(fragment.importanceScore || 0).toFixed(2)}</td>
-          <td>${Number(fragment.recognitionRisk || 0).toFixed(2)}</td>
-          <td>${Number(fragment.displayPriority || 0)}</td>
-          <td>${hiddenSet.has(fragment.index) ? "yes" : "-"}</td>
-          <td>${escapeHtml(fragment.analysisReason || fragment.analysisStatus || "-")}</td>
-        </tr>
-      `).join("");
-    return `
-      <section class="debug-panel debug-analysis">
-        <h3>画像分析</h3>
-        <div class="debug-table-wrap">
-          <table class="debug-table">
-            <thead><tr><th>index</th><th>labels</th><th>face</th><th>person</th><th>text</th><th>importance</th><th>risk</th><th>priority</th><th>hidden</th><th>reason</th></tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
-        </div>
-      </section>
-    `;
-  }
   function tab(route, label) {
     return `<button type="button" data-route="${route}" ${state.route === route ? 'aria-current="page"' : ""}><span>${label}</span></button>`;
   }
@@ -1541,8 +1293,8 @@
           <h1>登録する写真を選んでください。</h1>
           <p>カメラで撮るか、端末にある写真を選べます。登録した写真は、指定した日まで表示されません。</p>
         </header>
-        <input id="cameraInput" class="file-input" type="file" accept="image/*" capture="environment" tabindex="-1" aria-hidden="true">
-        <input id="libraryInput" class="file-input" type="file" accept="image/*" tabindex="-1" aria-hidden="true">
+        <input id="cameraInput" class="file-input" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" tabindex="-1" aria-hidden="true">
+        <input id="libraryInput" class="file-input" type="file" accept="image/jpeg,image/png,image/webp" tabindex="-1" aria-hidden="true">
         <div class="capture-actions">
           <button class="button" type="button" data-action="start-camera">カメラで撮る</button>
           <button class="button secondary" type="button" data-action="open-library">写真から選ぶ</button>
@@ -1887,90 +1639,15 @@
             </section>
           `;
         }).join("")}
+        <section class="account-security" aria-labelledby="account-security-title">
+          <div>
+            <h2 id="account-security-title">アカウント管理</h2>
+            <p>アカウントを削除すると、クラウドとこの端末に保存された写真・記録を復元できなくなります。</p>
+          </div>
+          <button class="button danger-soft" type="button" data-action="delete-account">アカウントを削除</button>
+        </section>
       </section>
     `);
-  }
-
-  function initGoogleSignInButton() {
-    const target = document.querySelector("#googleSignInButton");
-    if (!target || state.googleButtonRendered || !GOOGLE_CLIENT_ID) return;
-    if (!window.google?.accounts?.id) {
-      window.setTimeout(initGoogleSignInButton, 300);
-      return;
-    }
-    try {
-      window.google.accounts.id.initialize({
-        client_id: GOOGLE_CLIENT_ID,
-        callback: handleGoogleCredential,
-        use_fedcm_for_button: true
-      });
-      target.innerHTML = "";
-      window.google.accounts.id.renderButton(target, {
-        type: "standard",
-        theme: "outline",
-        size: "large",
-        text: "continue_with",
-        shape: "rectangular",
-        width: Math.min(320, target.clientWidth || 320)
-      });
-      state.googleButtonRendered = true;
-    } catch (error) {
-      console.warn("[re:Memory] Googleログインを初期化できませんでした", error);
-      target.innerHTML = `<p class="auth-note">Googleログインを準備できませんでした。ローカルで試すこともできます。</p>`;
-    }
-  }
-
-  async function handleGoogleCredential(response) {
-    const payload = parseJwtPayload(response?.credential);
-    if (!payload?.sub) {
-      state.error = "Googleログインの情報を確認できませんでした。もう一度お試しください。";
-      render();
-      return;
-    }
-    if (supabaseClient) {
-      const { data, error } = await supabaseClient.auth.signInWithIdToken({
-        provider: "google",
-        token: response.credential
-      });
-      if (error || !data.user) {
-        console.error("[re:Memory] Supabase Google sign-in failed", {
-          message: error?.message,
-          status: error?.status,
-          code: error?.code
-        });
-        state.error = "Googleアカウントの確認を続けます。表示されるGoogleの画面でもう一度アカウントを選んでください。";
-        render();
-        const { error: redirectError } = await supabaseClient.auth.signInWithOAuth({
-          provider: "google",
-          options: {
-            redirectTo: `${window.location.origin}${window.location.pathname}`
-          }
-        });
-        if (redirectError) {
-          console.error("[re:Memory] Supabase Google redirect failed", {
-            message: redirectError.message,
-            status: redirectError.status,
-            code: redirectError.code
-          });
-          state.error = "Googleログインを開始できませんでした。設定を確認して、もう一度お試しください。";
-          render();
-        }
-        return;
-      }
-      state.supabaseUser = data.user;
-    }
-    await saveAuthSession({
-      provider: "google",
-      userId: state.supabaseUser?.id || `google:${payload.sub}`,
-      name: payload.name || payload.given_name || "Googleユーザー",
-      email: payload.email || "",
-      picture: payload.picture || "",
-      signedInAt: realNowIso()
-    });
-    state.error = "";
-    state.route = "home";
-    await refresh();
-    resetViewPosition();
   }
 
   async function startGoogleOAuth() {
@@ -1985,83 +1662,45 @@
       }
     });
     if (error) {
-      console.error("[re:Memory] Supabase Google redirect failed", {
-        message: error.message,
-        status: error.status,
-        code: error.code
-      });
       state.busy = false;
       state.error = "Googleログインを開始できませんでした。少し待ってから、もう一度お試しください。";
       render();
     }
   }
 
-  function clearGuestData() {
-    for (const url of state.urls.values()) URL.revokeObjectURL(url);
-    state.memories = [];
-    state.fragments = [];
-    state.reflections = [];
-    state.images = new Map();
-    state.urls = new Map();
-    state.selectedFile = null;
-    if (state.selectedPreviewUrl) URL.revokeObjectURL(state.selectedPreviewUrl);
-    state.selectedPreviewUrl = "";
-    state.activeMemoryId = "";
-    state.transientOriginalMemoryId = "";
-  }
-
-  async function handleGuestLogin() {
-    clearGuestData();
-    state.guestMode = true;
-    state.supabaseUser = null;
-    state.settings.authSession = normalizeAuthSession({
-      provider: "guest",
-      userId: "guest-session",
-      name: "ゲスト",
-      email: "",
-      picture: "",
-      signedInAt: realNowIso()
-    });
-    state.error = "";
-    state.route = "home";
-    await refresh();
-    resetViewPosition();
-  }
-
-  async function handleLocalLogin(form) {
-    const formData = new FormData(form);
-    const name = String(formData.get("name") || "").trim() || "re:Memoryユーザー";
-    await saveAuthSession({
-      provider: "local",
-      userId: LOCAL_AUTH_USER_ID,
-      name,
-      email: "",
-      picture: "",
-      signedInAt: realNowIso()
-    });
-    state.error = "";
-    state.route = "home";
-    await refresh();
-    resetViewPosition();
-  }
-
   async function logout() {
-    if (state.guestMode) {
-      clearGuestData();
-      state.guestMode = false;
-      state.settings.authSession = null;
-      state.route = "login";
-      render();
-      resetViewPosition();
-      return;
-    }
-    if (window.google?.accounts?.id) window.google.accounts.id.disableAutoSelect();
     if (supabaseClient) await supabaseClient.auth.signOut();
     state.supabaseUser = null;
     await saveAuthSession(null);
+    clearRuntimeData();
     state.route = "login";
     state.activeMemoryId = "";
     state.transientOriginalMemoryId = "";
+    render();
+    resetViewPosition();
+  }
+
+  async function deleteAccount() {
+    if (!supabaseClient || !state.supabaseUser || state.busy) return;
+    if (!confirm("アカウントと保存済みの写真・記録をすべて削除します。この操作は取り消せません。続けますか？")) return;
+    state.busy = true;
+    state.error = "";
+    render();
+    const { error } = await supabaseClient.functions.invoke("delete-account", {
+      body: { confirmation: "DELETE_MY_ACCOUNT" }
+    });
+    if (error) {
+      state.busy = false;
+      state.error = "アカウント削除の完了を確認できませんでした。再ログインできる場合は、時間をおいてもう一度お試しください。";
+      render();
+      return;
+    }
+    for (const storeName of ["memories", "fragments", "reflections", "images", "settings"]) await clearStore(storeName);
+    state.supabaseUser = null;
+    state.settings.authSession = null;
+    clearRuntimeData();
+    state.route = "login";
+    state.busy = false;
     render();
     resetViewPosition();
   }
@@ -2078,7 +1717,6 @@
     else if (state.route === "memory") app.innerHTML = renderMemory(state.activeMemoryId);
     else if (state.route === "list") app.innerHTML = renderList();
     else app.innerHTML = renderHome();
-    initGoogleSignInButton();
   }
 
   async function refresh() {
@@ -2176,10 +1814,32 @@
 
   async function handleFile(file) {
     if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      state.error = "画像ファイルを選んでください。";
+    if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+      state.error = "JPEG、PNG、WebP形式の画像を選んでください。";
       render();
       return;
+    }
+    if (file.size <= 0 || file.size > MAX_IMAGE_BYTES) {
+      state.error = "画像は15MB以下のファイルを選んでください。";
+      render();
+      return;
+    }
+    let bitmap;
+    try {
+      bitmap = await createBitmap(file);
+      const width = Number(bitmap.width || bitmap.naturalWidth || 0);
+      const height = Number(bitmap.height || bitmap.naturalHeight || 0);
+      if (!width || !height || width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION || width * height > MAX_IMAGE_PIXELS) {
+        state.error = "画像の縦横サイズが大きすぎます。40メガピクセル以下の画像を選んでください。";
+        render();
+        return;
+      }
+    } catch (_error) {
+      state.error = "画像の内容を確認できませんでした。別の画像を選んでください。";
+      render();
+      return;
+    } finally {
+      if (bitmap && typeof bitmap.close === "function") bitmap.close();
     }
     if (state.selectedPreviewUrl) URL.revokeObjectURL(state.selectedPreviewUrl);
     state.selectedFile = file;
@@ -2198,9 +1858,9 @@
     try {
       const formData = new FormData(form);
       const memoryId = id("memory");
-      const originalPath = `indexeddb://images/${memoryId}/original`;
-      await saveImage(originalPath, state.selectedFile);
+      const originalPath = `indexeddb://images/${memoryId}/original.jpg`;
       const splitResult = await splitImage(memoryId, state.selectedFile);
+      await saveImage(originalPath, splitResult.originalBlob);
       const fragments = splitResult.fragments;
       const timingInput = {
         title: String(formData.get("title") || "").trim(),
@@ -2248,8 +1908,6 @@
       if (state.selectedPreviewUrl) URL.revokeObjectURL(state.selectedPreviewUrl);
       state.selectedPreviewUrl = "";
       state.activeMemoryId = memoryId;
-      state.settings.debugSelectedMemoryId = memoryId;
-      await saveDebugSettings();
       state.route = "memory";
       state.busy = false;
       await refresh();
@@ -2445,151 +2103,7 @@
     }
   }
 
-  function daysUntil(value) {
-    if (!value) return 0;
-    const diff = new Date(value).getTime() - appNow().getTime();
-    return Math.max(0, Math.ceil(diff / 86400000));
-  }
-
-  async function setDebugOffset(offset) {
-    state.settings.debugMode = true;
-    state.settings.debugDayOffset = Number(offset || 0);
-    await saveDebugSettings();
-    await refresh();
-  }
-
-  async function resetMemoryForDebug(memory) {
-    await resetFragments(memory.id);
-    const reflections = byMemory(memory.id, state.reflections);
-    for (const reflection of reflections) await deleteRecord("reflections", reflection.id);
-    memory.status = "fragmenting";
-    memory.currentStage = 1;
-    memory.lastReflectedDate = null;
-    memory.nextAvailableDate = appNowIso();
-    memory.availableAt = appNowIso();
-    memory.hiddenFragmentIndexes = normalizeHiddenFragmentIndexes(memory.hiddenFragmentIndexes);
-    memory.previewFragmentCount = 0;
-    memory.hasViewedOriginal = false;
-    memory.finalChoice = "";
-    await saveMemory(memory);
-    await unlockFragmentsForStage(memory);
-  }
-
-  async function moveDebugMemoryToChoice(memory) {
-    memory.status = "fragmenting";
-    memory.currentStage = 5;
-    memory.lastReflectedDate = localDateKey(addDaysFrom(appNow(), -1));
-    memory.nextAvailableDate = appNowIso();
-    memory.availableAt = memory.availableAt || appNowIso();
-    memory.hasViewedOriginal = false;
-    memory.finalChoice = "";
-    await saveMemory(memory);
-    await unlockFragmentsForStage(memory);
-  }
-
-  async function moveDebugToNextAnswerDay(memory) {
-    state.activeMemoryId = memory.id;
-    state.route = "memory";
-
-    if (memory.status === "viewed_original") {
-      state.error = "この思い出はすでに元の写真を表示済みです。";
-      render();
-      return;
-    }
-
-    const needsFutureDate = nextDisplayDate(memory) && !isAvailable(memory);
-    if (needsFutureDate) {
-      await setDebugOffset(Number(state.settings.debugDayOffset || 0) + daysUntil(nextDisplayDate(memory)));
-      return;
-    }
-
-    if (memory.status === "sleeping") {
-      memory.status = "fragmenting";
-      memory.currentStage = Math.max(1, Number(memory.currentStage || 1));
-      memory.nextAvailableDate = appNowIso();
-      await saveMemory(memory);
-      await unlockFragmentsForStage(memory);
-      await refresh();
-      return;
-    }
-
-    if (memory.status === "not_yet" || Number(memory.currentStage || 1) >= 5) {
-      await refresh();
-      return;
-    }
-
-    if (memory.lastReflectedDate === localDateKey()) {
-      await setDebugOffset(Number(state.settings.debugDayOffset || 0) + 1);
-      return;
-    }
-
-    await unlockFragmentsForStage(memory);
-    await refresh();
-  }
-
-  async function handleDebugAction(action) {
-    if (action === "advance-1") {
-      await setDebugOffset(Number(state.settings.debugDayOffset || 0) + 1);
-      return;
-    }
-    if (action === "advance-7") {
-      await setDebugOffset(Number(state.settings.debugDayOffset || 0) + 7);
-      return;
-    }
-    if (action === "reset-offset") {
-      await setDebugOffset(0);
-      return;
-    }
-    if (action === "reanalyze") {
-      const memory = selectedDebugMemory();
-      if (!memory) return;
-      state.busy = true;
-      render();
-      try {
-        await analyzeStoredMemoryFragments(memory);
-        state.busy = false;
-        await refresh();
-      } catch (error) {
-        state.error = `画像分析をやり直せませんでした。${error.message || ""}`;
-        state.busy = false;
-        render();
-      }
-      return;
-    }    if (action === "delete-all") {
-      if (!confirm("開発用データをすべて削除します。写真を含むローカル保存データも削除されます。よろしいですか？")) return;
-      for (const storeName of ["memories", "fragments", "reflections", "images"]) await clearStore(storeName);
-      state.activeMemoryId = "";
-      state.settings.debugSelectedMemoryId = "";
-      await saveDebugSettings();
-      await refresh();
-      return;
-    }
-    const memory = selectedDebugMemory();
-    if (!memory) return;
-    state.activeMemoryId = memory.id;
-    state.settings.debugSelectedMemoryId = memory.id;
-    if (action === "clear-today") {
-      memory.lastReflectedDate = localDateKey(addDaysFrom(appNow(), -1));
-      await saveMemory(memory);
-    } else if (action === "next-answer-day") {
-      await saveDebugSettings();
-      await moveDebugToNextAnswerDay(memory);
-      return;
-    } else if (action === "to-choice") {
-      await moveDebugMemoryToChoice(memory);
-    } else if (action === "reset-memory") {
-      await resetMemoryForDebug(memory);
-    }
-    await saveDebugSettings();
-    await refresh();
-  }
-
   app.addEventListener("click", async (event) => {
-    const debugAction = event.target.closest("[data-debug-action]")?.dataset.debugAction;
-    if (debugAction) {
-      await handleDebugAction(debugAction);
-      return;
-    }
     const routeButton = event.target.closest("[data-route]");
     if (routeButton) {
       setRoute(routeButton.dataset.route);
@@ -2599,8 +2113,6 @@
     if (openButton) {
       state.activeMemoryId = openButton.dataset.openMemory || openButton.dataset.routeMemory;
       state.transientOriginalMemoryId = "";
-      state.settings.debugSelectedMemoryId = state.activeMemoryId;
-      await saveDebugSettings();
       const memory = state.memories.find((item) => item.id === state.activeMemoryId);
       if (memory?.status === "viewed_original" && isAvailable(memory)) {
         await markOriginalViewed(memory);
@@ -2633,12 +2145,12 @@
       await logout();
       return;
     }
-    if (action === "guest-login") {
-      await handleGuestLogin();
-      return;
-    }
     if (action === "google-oauth") {
       await startGoogleOAuth();
+      return;
+    }
+    if (action === "delete-account") {
+      await deleteAccount();
       return;
     }
     if (action === "retake") {
@@ -2662,17 +2174,6 @@
   });
 
   app.addEventListener("change", (event) => {
-    if (event.target.matches("[data-debug-toggle]")) {
-      state.settings.debugMode = event.target.checked;
-      saveDebugSettings().then(refresh);
-      return;
-    }
-    if (event.target.matches("[data-debug-memory-select]")) {
-      state.settings.debugSelectedMemoryId = event.target.value;
-      state.activeMemoryId = event.target.value;
-      saveDebugSettings().then(refresh);
-      return;
-    }
     if (event.target.matches("#cameraInput, #libraryInput")) {
       handleFile(event.target.files?.[0]).catch((error) => {
         reportError("image-load", error, "写真を読み込めませんでした。別の写真を選んで、もう一度お試しください。");
@@ -2684,7 +2185,6 @@
   app.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (event.target.id === "memoryForm") await handleMemorySubmit(event.target);
-    if (event.target.id === "localLoginForm") await handleLocalLogin(event.target);
     if (event.target.id === "reflectionForm") await handleReflection(event.target, event.submitter);
     if (event.target.id === "feelingForm") await handleFeeling(event.target);
     if (event.target.id === "meaningForm") await handleMeaning(event.target);
