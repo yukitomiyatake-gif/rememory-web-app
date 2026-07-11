@@ -4,6 +4,7 @@ These files are for a separate staging Supabase project. Do not link this direct
 
 ## Files
 
+- `00_schema.sql`: audited production table structure and baseline policies
 - `01_rls_and_account_delete.sql`: table RLS and authenticated deletion RPC
 - `02_storage_policies.sql`: private bucket settings and Storage policies
 - `rollback.sql`: restores the policy shape observed in production on 2026-07-11
@@ -12,7 +13,7 @@ These files are for a separate staging Supabase project. Do not link this direct
 
 ## Order
 
-1. Create a separate staging project and restore a schema-only copy.
+1. Create a separate staging project and run `00_schema.sql`.
 2. Create users A and B and the fixtures in `TEST-DATA.md`.
 3. Save exports of `pg_policies`, grants, functions, bucket settings, and test data.
 4. Run `01_rls_and_account_delete.sql` in staging SQL Editor.

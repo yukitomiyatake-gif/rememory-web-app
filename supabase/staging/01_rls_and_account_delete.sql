@@ -2,19 +2,19 @@ begin;
 
 do $$
 declare
-  table_name text;
+  required_table_name text;
 begin
-  foreach table_name in array array['memories', 'memory_fragments', 'memory_reflections']
+  foreach required_table_name in array array['memories', 'memory_fragments', 'memory_reflections']
   loop
-    if to_regclass(format('public.%I', table_name)) is null then
-      raise exception 'Stopped: required table public.% is missing', table_name;
+    if to_regclass(format('public.%I', required_table_name)) is null then
+      raise exception 'Stopped: required table public.% is missing', required_table_name;
     end if;
     if not exists (
       select 1 from information_schema.columns
-      where table_schema = 'public' and information_schema.columns.table_name = table_name
+      where table_schema = 'public' and information_schema.columns.table_name = required_table_name
         and column_name = 'user_id' and data_type = 'uuid' and is_nullable = 'NO'
     ) then
-      raise exception 'Stopped: public.%.user_id must be uuid not null', table_name;
+      raise exception 'Stopped: public.%.user_id must be uuid not null', required_table_name;
     end if;
   end loop;
 

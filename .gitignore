@@ -1,5 +1,6 @@
 .env
 .env.*
+artifacts/staging-validation-*.json
 !.env.example
 assets/runtime-config.local.js
 supabase/.temp/

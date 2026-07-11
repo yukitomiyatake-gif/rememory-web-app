@@ -1,4 +1,4 @@
-import { createClient } from "npm:@supabase/supabase-js@2.110.2";
+import { withSupabase } from "npm:@supabase/server";
 
 const BUCKET = "memory-images";
 const CONFIRMATION = "DELETE_MY_ACCOUNT";
@@ -27,7 +27,7 @@ function allowedOrigin(request: Request) {
   return configured.includes(origin) ? origin : "";
 }
 
-async function listUserObjects(admin: ReturnType<typeof createClient>, prefix: string) {
+async function listUserObjects(admin: any, prefix: string) {
   const paths: string[] = [];
   const pending = [prefix];
 
@@ -58,60 +58,45 @@ async function listUserObjects(admin: ReturnType<typeof createClient>, prefix: s
   return paths;
 }
 
-Deno.serve(async (request) => {
-  const origin = allowedOrigin(request);
-  if (!Deno.env.get("ALLOWED_ORIGINS")) return response(null, 503, { error: "service_unavailable" });
-  if (!origin) return response(null, 403, { error: "origin_not_allowed" });
-  if (request.method === "OPTIONS") return response(origin, 204, {});
-  if (request.method !== "POST") return response(origin, 405, { error: "method_not_allowed" });
+export default {
+  fetch: withSupabase({ auth: "user" }, async (request, ctx) => {
+    const origin = allowedOrigin(request);
+    if (!Deno.env.get("ALLOWED_ORIGINS")) return response(null, 503, { error: "service_unavailable" });
+    if (!origin) return response(null, 403, { error: "origin_not_allowed" });
+    if (request.method === "OPTIONS") return response(origin, 204, {});
+    if (request.method !== "POST") return response(origin, 405, { error: "method_not_allowed" });
 
-  const authorization = request.headers.get("Authorization") || "";
-  if (!authorization.startsWith("Bearer ")) return response(origin, 401, { error: "authentication_required" });
+    let body: Record<string, unknown>;
+    try {
+      body = await request.json();
+    } catch {
+      return response(origin, 400, { error: "invalid_request" });
+    }
+    if (Object.keys(body).some((key) => key !== "confirmation")) {
+      return response(origin, 400, { error: "invalid_request" });
+    }
+    if (body.confirmation !== CONFIRMATION) return response(origin, 400, { error: "confirmation_required" });
 
-  let body: Record<string, unknown>;
-  try {
-    body = await request.json();
-  } catch {
-    return response(origin, 400, { error: "invalid_request" });
-  }
-  if (Object.keys(body).some((key) => key !== "confirmation")) {
-    return response(origin, 400, { error: "invalid_request" });
-  }
-  if (body.confirmation !== CONFIRMATION) return response(origin, 400, { error: "confirmation_required" });
+    const claims = ctx.userClaims as Record<string, unknown> | undefined;
+    const userId = String(claims?.id || claims?.sub || "");
+    if (!userId) return response(origin, 401, { error: "authentication_required" });
 
-  const supabaseUrl = Deno.env.get("SUPABASE_URL");
-  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  const publishableKey = Deno.env.get("SUPABASE_ANON_KEY");
-  if (!supabaseUrl || !serviceRoleKey || !publishableKey) return response(origin, 503, { error: "service_unavailable" });
+    try {
+      const paths = await listUserObjects(ctx.supabaseAdmin, userId);
+      for (let index = 0; index < paths.length; index += 100) {
+        const { error } = await ctx.supabaseAdmin.storage.from(BUCKET).remove(paths.slice(index, index + 100));
+        if (error) throw new Error("storage-delete-failed");
+      }
 
-  const token = authorization.slice("Bearer ".length);
-  const admin = createClient(supabaseUrl, serviceRoleKey, {
-    auth: { persistSession: false, autoRefreshToken: false }
-  });
-  const caller = createClient(supabaseUrl, publishableKey, {
-    global: { headers: { Authorization: authorization } },
-    auth: { persistSession: false, autoRefreshToken: false }
-  });
+      const { error: dataError } = await ctx.supabase.rpc("delete_current_user_data");
+      if (dataError) throw new Error("database-delete-failed");
 
-  const { data: userData, error: userError } = await admin.auth.getUser(token);
-  const user = userData.user;
-  if (userError || !user) return response(origin, 401, { error: "authentication_required" });
-
-  try {
-    const paths = await listUserObjects(admin, user.id);
-    for (let index = 0; index < paths.length; index += 100) {
-      const { error } = await admin.storage.from(BUCKET).remove(paths.slice(index, index + 100));
-      if (error) throw new Error("storage-delete-failed");
+      const { error: authError } = await ctx.supabaseAdmin.auth.admin.deleteUser(userId, false);
+      if (authError) throw new Error("auth-delete-failed");
+    } catch {
+      return response(origin, 500, { error: "account_delete_failed" });
     }
 
-    const { error: dataError } = await caller.rpc("delete_current_user_data");
-    if (dataError) throw new Error("database-delete-failed");
-
-    const { error: authError } = await admin.auth.admin.deleteUser(user.id, false);
-    if (authError) throw new Error("auth-delete-failed");
-  } catch {
-    return response(origin, 500, { error: "account_delete_failed" });
-  }
-
-  return response(origin, 200, { deleted: true });
-});
+    return response(origin, 200, { deleted: true });
+  })
+};

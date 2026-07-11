@@ -30,8 +30,9 @@ requireMatch("image MIME allowlist exists", app, /image\/jpeg.*image\/png.*image
 requireMatch("image byte limit exists", app, /MAX_IMAGE_BYTES/);
 requireMatch("image dimension limit exists", app, /MAX_IMAGE_PIXELS/);
 requireMatch("account deletion uses Edge Function", app, /functions\.invoke\("delete-account"/);
-requireMatch("account deletion requires authenticated user", deleteFunction, /admin\.auth\.getUser\(token\)/);
+requireMatch("account deletion requires authenticated user", deleteFunction, /withSupabase\(\{ auth: "user" \}/);
 requireMatch("account deletion uses server-side admin API", deleteFunction, /auth\.admin\.deleteUser/);
+requireMatch("account deletion derives the target from verified claims", deleteFunction, /ctx\.userClaims/);
 requireMatch("RLS migration enables RLS", rlsMigration, /enable row level security/g);
 requireMatch("RLS migration has ownership checks", rlsMigration, /auth\.uid\(\).*user_id/s);
 requireMatch("account deletion uses profiles.id", rlsMigration, /delete from public\.profiles where id = current_user_id/);
